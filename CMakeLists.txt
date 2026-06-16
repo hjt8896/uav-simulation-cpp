@@ -9,4 +9,6 @@ add_executable(aircraft_sim main.cpp
         BaseEffector.h
         MotorEffector.h
         MotorEffector.cpp
-        CommonTypes.h)
+        CommonTypes.h
+        Mixer.cpp
+        Mixer.h)
