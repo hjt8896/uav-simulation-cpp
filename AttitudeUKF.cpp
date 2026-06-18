@@ -275,7 +275,7 @@ void AttitudeUKF::update_accel(const Eigen::Vector3d& Z_acc) {
     double acc_norm = Z_acc.norm();
     double error = std::abs(acc_norm - 9.81);
     double base_noise = 0.5; // 基础噪声
-    double adaptive_noise = (error < 0.5) ? base_noise : (base_noise + 15.0 * error);
+    double adaptive_noise = (error < 0.5) ? base_noise : (base_noise * exp(error));
     Eigen::Matrix3d S_R_acc = Eigen::Matrix3d::Identity() * adaptive_noise;
 
     // 3. 预测观测映射

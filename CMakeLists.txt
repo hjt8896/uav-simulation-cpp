@@ -1,10 +1,15 @@
 cmake_minimum_required(VERSION 4.1)
 project(aircraft_sim)
+# 找到系统中的 GLFW3 库
+find_package(glfw3 REQUIRED)
+include_directories(${CMAKE_SOURCE_DIR}/mujoco-3.9.0/include)
+# 2. 告诉链接器去哪里找动态库
+link_directories(${CMAKE_SOURCE_DIR}/mujoco-3.9.0/lib)
 
 set(CMAKE_CXX_STANDARD 17)
 
 add_executable(aircraft_sim
-        main.cpp
+#        main.cpp
         RigidBody.cpp
         RigidBody.h
         BaseEffector.h
@@ -26,5 +31,13 @@ add_executable(aircraft_sim
         NotchFilter.h
         MathUtils.cpp
         MathUtils.h
-#                ukf_test.cpp
+        mujoco_sim.cpp
+        #                ukf_test.cpp
         )
+
+target_link_libraries(
+        aircraft_sim
+        glfw
+        GL
+        mujoco
+)

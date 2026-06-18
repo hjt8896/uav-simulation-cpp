@@ -13,6 +13,7 @@
 #include "BMI088_Sensor.h"
 #include "NotchFilter.h"
 #include "MathUtils.h"
+#include "mujoco/mujoco.h"
 
 // 辅助函数：将真实状态映射为传感器需要的比力
 Eigen::Vector3d get_true_specific_force(const RigidBodyState& state) {
@@ -50,8 +51,8 @@ int main() {
 
     // ================= 3. 环境与算法初始化 =================
     // 阵风：在 0.5s 到 0.6s 施加 0.5Nm Roll 轴力矩
-    WindEffector gust_ideal(0.5, 0.6, Eigen::Vector3d::Zero(), Eigen::Vector3d(0.5, 0.0, 0.0));
-    WindEffector gust_real(0.5, 0.6, Eigen::Vector3d::Zero(), Eigen::Vector3d(0.5, 0.0, 0.0));
+    WindEffector gust_ideal(0.5, 0.6, Eigen::Vector3d::Zero(), Eigen::Vector3d(0.0, 0.0, 0.0));
+    WindEffector gust_real(0.5, 0.6, Eigen::Vector3d::Zero(), Eigen::Vector3d(0.0, 0.0, 0.0));
     quad_ideal.add_effector(&gust_ideal);
     quad_real.add_effector(&gust_real);
 
@@ -137,9 +138,9 @@ int main() {
 
         // ----------------- [C] 数据记录 -----------------
         log << t << ","
-            << quad_ideal.state.sigma(0) << ","
-            << quad_real.state.sigma(0) << ","
-            << ukf.get_mrp()(0) << ","
+            << quad_ideal.state.omega(0) << ","
+            << quad_real.state.omega(0) << ","
+            << ukf.get_omega()(0) << ","
             << tau_i(0) << "," << tau_r(0) << "\n";
 
         t += dt;
