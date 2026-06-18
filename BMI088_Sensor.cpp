@@ -18,7 +18,7 @@ BMI088_Sensor::BMI088_Sensor() : gen(std::random_device{}()),
         fogm_driving_noise = std::normal_distribution<double>(0.0, driving_noise_std);
 
         // 加速度计初始化 (假设典型的装配应力带来的静态零偏)
-        constant_acc_bias << 0.15, -0.12, 0.20; // 静态零偏 (m/s^2)
+        constant_acc_bias << 0.00, 0.00, 0.00; // 静态零偏 (m/s^2)
     }
 
 // --- 内部辅助函数：合成电机高频振动 ---

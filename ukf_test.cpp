@@ -4,33 +4,34 @@
 #include "AttitudeUKF.h"
 #include "BMI088_Sensor.h"
 #include "NotchFilter.h"
+#include "MathUtils.h"
 // 辅助函数：MRP 运动学微分方程 (用于推演真实姿态)
-Eigen::Vector3d compute_true_mrp_dot(const Eigen::Vector3d& sigma, const Eigen::Vector3d& omega) {
-    double sigma_sq = sigma.squaredNorm();
-    Eigen::Matrix3d sigma_cross;
-    sigma_cross <<     0.0,  -sigma(2),   sigma(1),
-                  sigma(2),        0.0,  -sigma(0),
-                 -sigma(1),   sigma(0),        0.0;
-
-    Eigen::Matrix3d B = (1.0 - sigma_sq) * Eigen::Matrix3d::Identity()
-                      + 2.0 * sigma_cross
-                      + 2.0 * sigma * sigma.transpose();
-    return 0.25 * B * omega;
-}
-
-// 辅助函数：MRP 转 DCM (用于把真实的地理场投影到机体系，供传感器读取)
-Eigen::Matrix3d true_mrp_to_dcm(const Eigen::Vector3d& sigma) {
-    double sigma_sq = sigma.squaredNorm();
-    double den = 1.0 + sigma_sq;
-    double den_sq = den * den;
-    Eigen::Matrix3d sigma_cross;
-    sigma_cross <<     0.0,  -sigma(2),   sigma(1),
-                  sigma(2),        0.0,  -sigma(0),
-                 -sigma(1),   sigma(0),        0.0;
-    return Eigen::Matrix3d::Identity()
-         - (4.0 * (1.0 - sigma_sq) / den_sq) * sigma_cross
-         + (8.0 / den_sq) * (sigma_cross * sigma_cross);
-}
+// Eigen::Vector3d compute_true_mrp_dot(const Eigen::Vector3d& sigma, const Eigen::Vector3d& omega) {
+//     double sigma_sq = sigma.squaredNorm();
+//     Eigen::Matrix3d sigma_cross;
+//     sigma_cross <<     0.0,  -sigma(2),   sigma(1),
+//                   sigma(2),        0.0,  -sigma(0),
+//                  -sigma(1),   sigma(0),        0.0;
+//
+//     Eigen::Matrix3d B = (1.0 - sigma_sq) * Eigen::Matrix3d::Identity()
+//                       + 2.0 * sigma_cross
+//                       + 2.0 * sigma * sigma.transpose();
+//     return 0.25 * B * omega;
+// }
+//
+// // 辅助函数：MRP 转 DCM (用于把真实的地理场投影到机体系，供传感器读取)
+// Eigen::Matrix3d true_mrp_to_dcm(const Eigen::Vector3d& sigma) {
+//     double sigma_sq = sigma.squaredNorm();
+//     double den = 1.0 + sigma_sq;
+//     double den_sq = den * den;
+//     Eigen::Matrix3d sigma_cross;
+//     sigma_cross <<     0.0,  -sigma(2),   sigma(1),
+//                   sigma(2),        0.0,  -sigma(0),
+//                  -sigma(1),   sigma(0),        0.0;
+//     return Eigen::Matrix3d::Identity()
+//          - (4.0 * (1.0 - sigma_sq) / den_sq) * sigma_cross
+//          + (8.0 / den_sq) * (sigma_cross * sigma_cross);
+// }
 
 int main() {
     std::cout << "--- 启动 SR-UKF 虚拟宇宙 (搭载纯血 BMI088 物理级模型) ---" << std::endl;
@@ -87,10 +88,10 @@ int main() {
         );
 
         // 使用 RK4 积分出此时此刻绝对真实的姿态 true_sigma
-        Eigen::Vector3d k1 = compute_true_mrp_dot(true_sigma, true_omega);
-        Eigen::Vector3d k2 = compute_true_mrp_dot(true_sigma + 0.5 * dt * k1, true_omega);
-        Eigen::Vector3d k3 = compute_true_mrp_dot(true_sigma + 0.5 * dt * k2, true_omega);
-        Eigen::Vector3d k4 = compute_true_mrp_dot(true_sigma + dt * k3, true_omega);
+        Eigen::Vector3d k1 = MathUtils::mrp_kinematics(true_sigma, true_omega);
+        Eigen::Vector3d k2 = MathUtils::mrp_kinematics(true_sigma + 0.5 * dt * k1, true_omega);
+        Eigen::Vector3d k3 = MathUtils::mrp_kinematics(true_sigma + 0.5 * dt * k2, true_omega);
+        Eigen::Vector3d k4 = MathUtils::mrp_kinematics(true_sigma + dt * k3, true_omega);
         true_sigma += (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
 
         // ==========================================
@@ -100,7 +101,7 @@ int main() {
         Eigen::Vector3d gyro_read = bmi088.read_gyro(true_omega, motor_speeds, current_time, dt);
 
         // 2. 加速度计读取：必须先算出当前的真实比力
-        Eigen::Matrix3d R_NB = true_mrp_to_dcm(true_sigma);
+        Eigen::Matrix3d R_NB = MathUtils::mrp_to_dcm(true_sigma);
         Eigen::Vector3d f_N(0.0, 0.0, -9.81);
         Eigen::Vector3d true_acc_body = R_NB * f_N; // 将NED系下的重力比力投影到机体系
 

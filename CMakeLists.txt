@@ -4,7 +4,7 @@ project(aircraft_sim)
 set(CMAKE_CXX_STANDARD 17)
 
 add_executable(aircraft_sim
-#        main.cpp
+        main.cpp
         RigidBody.cpp
         RigidBody.h
         BaseEffector.h
@@ -26,5 +26,5 @@ add_executable(aircraft_sim
         NotchFilter.h
         MathUtils.cpp
         MathUtils.h
-                ukf_test.cpp
+#                ukf_test.cpp
         )

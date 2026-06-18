@@ -17,6 +17,8 @@ private:
     double spin_dir;          // 旋转方向：1.0 为 CCW, -1.0 为 CW
 
     double omega_motor;       // 当前电机转速 (rad/s)
+    double omega_target; // ★ 电调接收到的目标转速指令
+    double tau;          // ★ 电机的一阶惯性时间常数 (响应快慢)
 
 public:
     MotorEffector(Eigen::Vector3d position, double rotor_inertia, double thrust_coeff, double torque_coeff, double direction);

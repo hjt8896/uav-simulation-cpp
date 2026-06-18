@@ -18,7 +18,7 @@
 Eigen::Vector3d get_true_specific_force(const RigidBodyState& state) {
     Eigen::Matrix3d R_NB = MathUtils::mrp_to_dcm(state.sigma);
     Eigen::Vector3d f_N(0, 0, -9.81);
-    return R_NB * (state.a + f_N);
+    return R_NB * ( f_N);
 }
 
 int main() {
@@ -94,6 +94,18 @@ int main() {
         quad_ideal.step_rk4(t, dt);
 
         // ----------------- [B] 真实无人机 (闭环滤波) -----------------
+        // ★ 黑科技：动态 RPM 滤波 (计算上一帧的平均电机频率)
+        double avg_omega = (motor_speeds_real[0] + motor_speeds_real[1] +
+                            motor_speeds_real[2] + motor_speeds_real[3]) / 4.0;
+        // 如果电机没转，给个底线频率防止除零；否则实时追踪电机震荡频率
+        float current_hz = (avg_omega > 10.0) ? (avg_omega / (2.0 * M_PI)) : 78.0f;
+
+        // 实时更新陷波器的靶心！
+        notch_gyro_x.init(current_hz, f_samp, 2.0f); notch_gyro_y.init(current_hz, f_samp, 2.0f); notch_gyro_z.init(current_hz, f_samp, 2.0f);
+        notch_acc_x.init(current_hz, f_samp, 2.0f);  notch_acc_y.init(current_hz, f_samp, 2.0f);  notch_acc_z.init(current_hz, f_samp, 2.0f);
+
+        // 1. 传感器获取污染数据
+        // ... 接下来的 gyro_raw 和 acc_raw 读取保持不变 ...
         // 1. 传感器获取污染数据 (使用上一帧的电机转速生成震动)
         Eigen::Vector3d gyro_raw = bmi088.read_gyro(quad_real.state.omega, motor_speeds_real, t, dt);
         Eigen::Vector3d acc_raw = bmi088.read_acc(get_true_specific_force(quad_real.state), motor_speeds_real, t);

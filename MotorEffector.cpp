@@ -3,12 +3,14 @@
 //
 #include "MotorEffector.h"
 
+// 构造函数：初始化时加上 tau 和 omega_target
 MotorEffector::MotorEffector(Eigen::Vector3d position, double rotor_inertia, double thrust_coeff, double torque_coeff, double direction)
-        : pos_B(position), Jr(rotor_inertia), k_f(thrust_coeff), k_m(torque_coeff), spin_dir(direction), omega_motor(0.0) {}
+        : pos_B(position), Jr(rotor_inertia), k_f(thrust_coeff), k_m(torque_coeff), spin_dir(direction),
+          omega_motor(0.0), omega_target(0.0), tau(0.02) {} // ★ tau = 0.02s (20ms) 是典型 5 寸机的响应时间
 
 // 设置目标转速（如果是仿真，这里可以加入一阶滞后的动力学更新）
 void MotorEffector::set_speed(double speed) {
-    omega_motor = speed;
+    omega_target = speed;
 }
 
 // 核心：向飞船主体提交力与力矩贡献 (严格遵守 FRD 前右下坐标系)
@@ -32,7 +34,11 @@ void MotorEffector::updateContributions(double time, BackSubContributions& contr
 }
 
 void MotorEffector::computeDerivatives(double time, double dt){
-    // 如果电机有一阶滞后模型，在这里更新电机的角加速度
-    // 比如：omega_motor_dot = (omega_target - omega_motor) / tau;
+    // 使用欧拉积分推演一阶惯性微分方程
+    // 公式：dw/dt = (w_target - w_motor) / tau
+    double omega_motor_dot = (omega_target - omega_motor) / tau;
+
+    // 更新此时此刻电机的真实转速
+    omega_motor += omega_motor_dot * dt;
 }
 
