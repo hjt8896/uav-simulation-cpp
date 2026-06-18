@@ -39,7 +39,8 @@ void RigidBody::add_effector(BaseEffector* eff) {
 }
 
 // 对应 BSK 的 equationsOfMotion: 计算状态在给定时间 t 的导数
-RigidBodyState RigidBody::compute_derivatives(double time, const RigidBodyState& current_state) {
+RigidBodyState RigidBody::compute_derivatives(double time, const RigidBodyState& current_state) const
+{
     BackSubContributions contrib;
     contrib.vecTrans.setZero();
     contrib.vecRot.setZero();

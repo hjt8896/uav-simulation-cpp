@@ -22,7 +22,7 @@ public:
     RigidBody(double mass, Eigen::Matrix3d inertia);
     void add_effector(BaseEffector* eff);
     // 对应 BSK 的 equationsOfMotion: 计算状态在给定时间 t 的导数
-    RigidBodyState compute_derivatives(double time, const RigidBodyState& current_state);
+    RigidBodyState compute_derivatives(double time, const RigidBodyState& current_state) const;
     // RK4 积分器核心实现
     void step_rk4(double t, double dt);
 

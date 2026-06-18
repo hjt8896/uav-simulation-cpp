@@ -1,69 +1,82 @@
 #include <iostream>
-#include <cmath>
-#include "MotorEffector.h"
+#include <vector>
+#include <iomanip>
+#include "CommonTypes.h"
 #include "RigidBody.h"
-// TIP 要<b>Run</b>代码，请按 <shortcut actionId="Run"/> 或点击装订区域中的 <icon src="AllIcons.Actions.Execute"/> 图标。
-int main() {
-    std::cout << "--- Quadcopter Dynamics Simulation Initialization ---" << std::endl;
+#include "MotorEffector.h"
+#include "Mixer.h"
+#include "SMCController.h"
+#include "MRPSteering.h"
+#include "WindEffector.h"
 
-    // 1. 初始化无人机参数 (X字型)
-    double mass = 1.0; // 1kg
+int main() {
+    std::cout << "--- Advanced Cascade Quadcopter Simulation ---" << std::endl;
+
+    // ================= 1. 物理世界与无人机初始化 =================
+    double mass = 1.0;
     Eigen::Matrix3d inertia = Eigen::Vector3d(0.01, 0.01, 0.02).asDiagonal();
     RigidBody quad(mass, inertia);
+    quad.state.p = Eigen::Vector3d(0, 0, 10); // 10米高空悬停
 
-    // 设定初始状态：在 10米 高空静止
-    quad.state.p = Eigen::Vector3d(0, 0, 10);
+    double l = 0.2, k_f = 1e-5, k_m = 2e-7, Jr = 1e-5;
+    MotorEffector m1(Eigen::Vector3d( l,  l, 0), Jr, k_f, k_m,  1.0);
+    MotorEffector m2(Eigen::Vector3d(-l, -l, 0), Jr, k_f, k_m,  1.0);
+    MotorEffector m3(Eigen::Vector3d( l, -l, 0), Jr, k_f, k_m, -1.0);
+    MotorEffector m4(Eigen::Vector3d(-l,  l, 0), Jr, k_f, k_m, -1.0);
+    quad.add_effector(&m1); quad.add_effector(&m2);
+    quad.add_effector(&m3); quad.add_effector(&m4);
 
-    // 电机参数
-    double l = 0.2;         // 轴距投影 (米)
-    double k_f = 1e-5;      // 升力系数
-    double k_m = 2e-7;      // 反扭矩系数
-    double Jr = 1e-5;       // 转子惯量
+    // ================= 2. 飞控算法大脑初始化 =================
+    // 神经分配器 (Mixer)
+    Mixer mixer(l, k_f, k_m, 100.0, 1000.0);
 
-    // 挂载 4 个电机效应器
-    MotorEffector m1(Eigen::Vector3d( l,  l, 0), Jr, k_f, k_m,  1.0); // 右前 CCW
-    MotorEffector m2(Eigen::Vector3d(-l, -l, 0), Jr, k_f, k_m,  1.0); // 左后 CCW
-    MotorEffector m3(Eigen::Vector3d( l, -l, 0), Jr, k_f, k_m, -1.0); // 右后 CW
-    MotorEffector m4(Eigen::Vector3d(-l,  l, 0), Jr, k_f, k_m, -1.0); // 左前 CW
+    // 内环：滑模控制器 (SMC)
+    SMCController smc(inertia);
 
-    quad.add_effector(&m1);
-    quad.add_effector(&m2);
-    quad.add_effector(&m3);
-    quad.add_effector(&m4);
+    // 外环：MRP 运动学控制器
+    MRPSteering steering(2.0, 0.5, 10.0, false); // K1=2.0, K3=0.5, 最大10rad/s
 
-    // 2. 计算完美悬停时的电机转速
-    // 4 * k_f * omega^2 = m * g  =>  omega = sqrt(m * g / (4 * k_f))
-    double hover_omega = std::sqrt((mass * 9.81) / (4.0 * k_f));
-    std::cout << "Theoretical Hover Motor Speed: " << hover_omega << " rad/s" << std::endl;
+    // 实例化一个阵风扰动：在 0.5s 到 0.6s 期间，施加 0.5Nm 的 Roll 轴力矩
+    WindEffector gust_wind(0.5, 0.6, Eigen::Vector3d::Zero(), Eigen::Vector3d(0.5, 0.0, 0.0));
+    quad.add_effector(&gust_wind); // 直接像挂电机一样挂在飞机上！
 
-    // 注入一个微小的扰动转速 (比如让 m1 多转 1 rad/s，看看非线性系统怎么崩溃)
-    m1.set_speed(hover_omega);
-    m2.set_speed(hover_omega);
-    m3.set_speed(hover_omega);
-    m4.set_speed(hover_omega);
-
-    // 3. 仿真循环
+    // ================= 3. 闭环仿真大循环 =================
     double t = 0.0;
-    double dt = 0.001; // 1ms 步长，匹配 1000Hz 的控制频率
-    int steps = 1000;  // 运行 1 秒
+    double base_thrust = mass * 9.81; // 标称悬停推力
+    Eigen::Vector3d target_sigma(0, 0, 0); // 目标姿态：完美水平
 
-    std::cout << "\nStarting RK4 Integration..." << std::endl;
-    for (int i = 0; i <= steps; ++i) {
+    std::cout << "Simulation running. A massive 0.5Nm Roll disturbance will hit at T=0.5s!" << std::endl;
+
+
+    for (int i = 0; i <= 2000; ++i) {
+        double dt = 0.001;
+
+        // 1. 外环 (Attitude)
+        Eigen::Vector3d omega_d, omega_d_dot;
+        steering.compute_steering(quad.state.sigma - target_sigma, omega_d, omega_d_dot);
+
+        // 2. 内环 (Rate)
+        Eigen::Vector3d tau_cmd = smc.compute_torque(quad.state.omega, omega_d, omega_d_dot, dt);
+
+        // 3. 分配
+        auto speeds = mixer.allocate(base_thrust, tau_cmd(0), tau_cmd(1), tau_cmd(2));
+        m1.set_speed(speeds[0]); m2.set_speed(speeds[1]);
+        m3.set_speed(speeds[2]); m4.set_speed(speeds[3]);
+
+        // 4. 物理世界时间推移 (风力会在底层被自动结算！)
         quad.step_rk4(t, dt);
         t += dt;
 
-        // 每 100ms (0.1秒) 打印一次状态
-        if (i % 100 == 0) {
-            std::cout << "Time: " << t << "s | "
-                      << "Alt(Z): " << quad.state.p(2) << " m | "
-                      << "MRP: [" << quad.state.sigma(0) << ", "
-                                  << quad.state.sigma(1) << ", "
-                                  << quad.state.sigma(2) << "]" << std::endl;
+        // --- F. 终端遥测数据打印 ---
+        if (i % 100 == 0) { // 每 0.1s 打印一次
+            std::cout << std::fixed << std::setprecision(4)
+                      << "T: " << t << "s | "
+                      << "Roll MRP: " << std::setw(8) << quad.state.sigma(0) << " | "
+                      << "Motor1: " << std::setw(6) << speeds[0] << " rad/s"
+                      << std::endl;
         }
     }
 
-    std::cout << "\nSimulation Complete. Due to the 1 rad/s disturbance on Motor 1, "
-              << "you should observe the altitude dropping and MRP deviating from zero." << std::endl;
-
+    std::cout << "\nTest Complete. The SMC Controller should have crushed the wind disturbance!" << std::endl;
     return 0;
 }

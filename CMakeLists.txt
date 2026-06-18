@@ -11,4 +11,14 @@ add_executable(aircraft_sim main.cpp
         MotorEffector.cpp
         CommonTypes.h
         Mixer.cpp
-        Mixer.h)
+        Mixer.h
+        SMCController.cpp
+        SMCController.h
+        MRPSteering.cpp
+        MRPSteering.h
+        WindEffector.cpp
+        WindEffector.h
+        BMI088_Sensor.cpp
+        BMI088_Sensor.h
+        AttitudeUKF.cpp
+        AttitudeUKF.h)
