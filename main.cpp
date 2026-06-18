@@ -8,6 +8,7 @@
 #include "SMCController.h"
 #include "MRPSteering.h"
 #include "WindEffector.h"
+#include "AttitudeUKF.h"
 
 int main() {
     std::cout << "--- Advanced Cascade Quadcopter Simulation ---" << std::endl;

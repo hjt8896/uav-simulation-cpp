@@ -5,7 +5,6 @@
 #include "AttitudeUKF.h"
 
 AttitudeUKF::AttitudeUKF() {
-    x_bar = Eigen::VectorXd::Zero(n);
     x_hat = Eigen::VectorXd::Zero(n);
     S = Eigen::MatrixXd::Identity(n, n) * 0.1; // 初始误差平方根
 
@@ -137,7 +136,7 @@ void AttitudeUKF::predict(double dt) {
 
     // 1. 撒网：生成 19 个 Sigma 点
     generateSigmaPoints();
-
+    Eigen::VectorXd x_bar = Eigen::VectorXd::Zero(n);
     // 2. 让子弹飞：将 19 个点全部塞进物理方程里推演 1ms
     for (int i = 0; i < n_sigma; ++i) {
         // system_dynamics() 是我们接下来要写的非线性状态转移方程
@@ -177,7 +176,7 @@ void AttitudeUKF::predict(double dt) {
     cholDownDate(S_bar, err_0, wC(0)); // wC(0) 是那个巨大的负数
 
     // 6. 更新系统状态，准备进入观测更新
-    // x_hat = x_bar;
+    x_hat = x_bar;
     S = S_bar;
 }
 
@@ -193,102 +192,140 @@ Eigen::VectorXd AttitudeUKF::system_dynamics(const Eigen::VectorXd& state_in, co
     return state_in + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
 }
 
-// ★ 终极核心 2：测量更新 (修正步)
-// 假设我们融合 3轴加速度 + 3轴磁力计，观测维度 m = 6
-void AttitudeUKF::update(const Eigen::VectorXd& Z_actual) {
-    int m = Z_actual.rows(); // 观测维度
-
-    // 1. 预测观测值：将 19 个 Sigma 点塞入观测方程 h(X)
-    Eigen::MatrixXd Z_sigma(m, n_sigma);
-    for (int i = 0; i < n_sigma; ++i) {
-        // measurement_model 是我们需要写的 h(X) 投影函数
-        Z_sigma.col(i) = measurement_model(Y_sigma.col(i));
-    }
-
-    // 2. 收网 (均值)：计算预测的平均传感器读数 z_hat
-    Eigen::VectorXd z_hat = Eigen::VectorXd::Zero(m);
-    for (int i = 0; i < n_sigma; ++i) {
-        z_hat += wM(i) * Z_sigma.col(i);
-    }
-
-    // 3. 构建观测协方差的平方根 S_y (极其优雅的 QR + Downdate)
-    Eigen::MatrixXd M_meas((2 * n) + m, m);
-    for (int i = 1; i <= 2 * n; ++i) {
-        M_meas.row(i - 1) = std::sqrt(wC(i)) * (Z_sigma.col(i) - z_hat).transpose();
-    }
-    M_meas.bottomRows(m) = S_R.transpose(); // 压入传感器本底噪声
-
-    // 对 M_meas 执行 QR 分解
-    Eigen::HouseholderQR<Eigen::MatrixXd> qr_meas(M_meas);
-    Eigen::MatrixXd R_meas = qr_meas.matrixQR().triangularView<Eigen::Upper>();
-    Eigen::MatrixXd S_y = R_meas.block(0, 0, m, m).transpose();
-
-    // 扣除中心点负权重
-    Eigen::VectorXd z_err_0 = Z_sigma.col(0) - z_hat;
-    cholDownDate(S_y, z_err_0, wC(0));
-
-    // 4. 计算状态与观测的互协方差 P_xz
-    Eigen::MatrixXd P_xz = Eigen::MatrixXd::Zero(n, m);
-    for (int i = 0; i < n_sigma; ++i) {
-        P_xz += wC(i) * (Y_sigma.col(i) - x_bar) * (Z_sigma.col(i) - z_hat).transpose();
-    }
-
-    // 5. 计算卡尔曼增益 K = P_xz * (S_y * S_y^T)^-1
-    // 为了绝对的数值稳定，这里使用 LLT (Cholesky) 求解器，而不是直接求逆！
-    Eigen::MatrixXd P_zz = S_y * S_y.transpose();
-    Eigen::MatrixXd K = P_xz * P_zz.llt().solve(Eigen::MatrixXd::Identity(m, m));
-
-    // 6. 状态更新：最终的真理时刻！
-    x_hat = x_bar + K * (Z_actual - z_hat);
-
-    // 7. 协方差平方根更新：神级 U-Matrix 连续降维 (完美对应 Basilisk 源码)
-    // P_new = P_bar - K * P_zz * K^T
-    // 在 SR-UKF 中，等价于连续减去 U = K * S_y 的每一列
-    Eigen::MatrixXd U = K * S_y;
-
-    for (int i = 0; i < m; ++i) {
-        // 注意这里的权重是 -1.0，因为我们在连续从 S 矩阵里“挖沙子”
-        cholDownDate(S, U.col(i), -1.0);
-    }
-}
-
-// --- 核心观测方程：Z = h(X) ---
-Eigen::VectorXd AttitudeUKF::measurement_model(const Eigen::VectorXd& x) {
-
-    // 1. 提取预测状态里的 MRP 姿态
-    Eigen::Vector3d sigma = x.segment<3>(0);
-
-    // 2. 将 MRP 转换为方向余弦矩阵 (DCM)，即 R_NB (从地理系 N 投影到机体系 B)
+// --- 物理映射：提取公共的 MRP 转 DCM ---
+Eigen::Matrix3d AttitudeUKF::mrp_to_dcm(const Eigen::Vector3d& sigma) {
     double sigma_sq = sigma.squaredNorm();
     double den = 1.0 + sigma_sq;
     double den_sq = den * den;
 
-    // 构造反对称矩阵 (叉乘矩阵)
     Eigen::Matrix3d sigma_cross;
     sigma_cross <<     0.0,  -sigma(2),   sigma(1),
                   sigma(2),        0.0,  -sigma(0),
                  -sigma(1),   sigma(0),        0.0;
 
-    // MRP 转 DCM 的标准分析力学公式
-    Eigen::Matrix3d R_NB = Eigen::Matrix3d::Identity()
-                         - (4.0 * (1.0 - sigma_sq) / den_sq) * sigma_cross
-                         + (8.0 / den_sq) * (sigma_cross * sigma_cross);
+    return Eigen::Matrix3d::Identity()
+         - (4.0 * (1.0 - sigma_sq) / den_sq) * sigma_cross
+         + (8.0 / den_sq) * (sigma_cross * sigma_cross);
+}
 
-    // 3. 设定宇宙常量：地理系 (N系, NED标准) 下的基准场矢量
-    // 比力基准 (静止时支撑力向上，Z为负)
-    Eigen::Vector3d f_N(0.0, 0.0, -9.81);
+// --- 分离的观测方程 ---
+Eigen::Vector3d AttitudeUKF::measurement_model_accel(const Eigen::VectorXd& x) {
+    Eigen::Matrix3d R_NB = mrp_to_dcm(x.segment<3>(0));
+    Eigen::Vector3d f_N(0.0, 0.0, -9.81); // 桌面静止时，感受到的比力向上
+    return R_NB * f_N;
+}
 
-    // 地磁基准 (假设哈尔滨等地的地磁矢量，北向有分量，向下有倾角分量)
-    // 实际工程中，这个向量通常在飞控开机时初始化捕获，或由查表得出
-    Eigen::Vector3d mag_N(0.22, 0.0, 0.45);
+Eigen::Vector3d AttitudeUKF::measurement_model_mag(const Eigen::VectorXd& x) {
+    Eigen::Matrix3d R_NB = mrp_to_dcm(x.segment<3>(0));
+    Eigen::Vector3d mag_N(0.22, 0.0, 0.45); // 地磁参考场 (随地理位置定)
+    return R_NB * mag_N;
+}
 
-    // 4. 空间投影：将绝对场映射到机体传感器上
-    Eigen::Vector3d acc_pred = R_NB * f_N;
-    Eigen::Vector3d mag_pred = R_NB * mag_N;
+// ★ 极其性感的通用底层测量更新引擎
+void AttitudeUKF::measurement_update_core(const Eigen::Vector3d& Z_actual, const Eigen::MatrixXd& Z_sigma, const Eigen::Matrix3d& S_R_curr) {
+    int m = 3;
 
-    // 5. 组装返回：前 3 维是预测加速度，后 3 维是预测磁场
-    Eigen::VectorXd z_pred(6);
-    z_pred << acc_pred, mag_pred;
+    // 1. 计算预测观测均值
+    Eigen::Vector3d z_hat = Eigen::Vector3d::Zero();
+    for (int i = 0; i < n_sigma; ++i) {
+        z_hat += wM(i) * Z_sigma.col(i);
+    }
 
-    return z_pred;
+    // 2. 构建 S_y 并做 QR 分解与 Downdate
+    Eigen::MatrixXd M_meas((2 * n) + m, m);
+    for (int i = 1; i <= 2 * n; ++i) {
+        M_meas.row(i - 1) = std::sqrt(wC(i)) * (Z_sigma.col(i) - z_hat).transpose();
+    }
+    M_meas.bottomRows(m) = S_R_curr.transpose();
+
+    Eigen::HouseholderQR<Eigen::MatrixXd> qr_meas(M_meas);
+    Eigen::MatrixXd R_meas = qr_meas.matrixQR().triangularView<Eigen::Upper>();
+    Eigen::MatrixXd S_y = R_meas.block(0, 0, m, m).transpose();
+
+    Eigen::Vector3d z_err_0 = Z_sigma.col(0) - z_hat;
+    cholDownDate(S_y, z_err_0, wC(0));
+
+    // 3. 计算互协方差 P_xz (注意：使用当前的 X_sigma 和 x_hat！)
+    Eigen::MatrixXd P_xz = Eigen::MatrixXd::Zero(n, m);
+    for (int i = 0; i < n_sigma; ++i) {
+        P_xz += wC(i) * (X_sigma.col(i) - x_hat) * (Z_sigma.col(i) - z_hat).transpose();
+    }
+
+    // 4. 计算卡尔曼增益 K (LLT求解保证稳定)
+    Eigen::MatrixXd P_zz = S_y * S_y.transpose();
+    Eigen::MatrixXd K = P_xz * P_zz.llt().solve(Eigen::Matrix3d::Identity());
+
+    // 5. 状态更新
+    x_hat = x_hat + K * (Z_actual - z_hat);
+
+    // 6. U-Matrix 连续降维更新协方差
+    Eigen::MatrixXd U = K * S_y;
+    for (int i = 0; i < m; ++i) {
+        cholDownDate(S, U.col(i), -1.0);
+    }
+}
+
+// --- 接口：加速度计自适应序贯更新 ---
+void AttitudeUKF::update_accel(const Eigen::Vector3d& Z_acc) {
+    // 1. 基于当前最新状态(或predict的先验)重新生成 19 个 Sigma 点
+    generateSigmaPoints();
+
+    // 2. 自适应观测噪声 (AKF)
+    double acc_norm = Z_acc.norm();
+    double error = std::abs(acc_norm - 9.81);
+    double base_noise = 0.5; // 基础噪声
+    double adaptive_noise = (error < 0.5) ? base_noise : (base_noise + 15.0 * error);
+    Eigen::Matrix3d S_R_acc = Eigen::Matrix3d::Identity() * adaptive_noise;
+
+    // 3. 预测观测映射
+    Eigen::MatrixXd Z_sigma(3, n_sigma);
+    for (int i = 0; i < n_sigma; ++i) {
+        Z_sigma.col(i) = measurement_model_accel(X_sigma.col(i));
+    }
+
+    // 4. 调用底层核心引擎
+    measurement_update_core(Z_acc, Z_sigma, S_R_acc);
+}
+
+// --- 接口：罗盘序贯更新 ---
+void AttitudeUKF::update_mag(const Eigen::Vector3d& Z_mag) {
+    // 1. 如果在同一毫秒内刚做了 accel 更新，这里的 generate 会基于 accel 修正后的新状态再撒点！
+    generateSigmaPoints();
+
+    // 2. 预测观测映射
+    Eigen::MatrixXd Z_sigma(3, n_sigma);
+    for (int i = 0; i < n_sigma; ++i) {
+        Z_sigma.col(i) = measurement_model_mag(X_sigma.col(i));
+    }
+
+    // 3. 假设罗盘初始化时给了固定的 S_R_mag (比如 0.1)
+    if (S_R_mag.isZero()) { S_R_mag = Eigen::Matrix3d::Identity() * 0.1; }
+
+    // 4. 调用底层核心引擎
+    measurement_update_core(Z_mag, Z_sigma, S_R_mag);
+}
+
+// --- 陀螺仪观测方程 ---
+Eigen::Vector3d AttitudeUKF::measurement_model_gyro(const Eigen::VectorXd& x) {
+    // 陀螺仪的读数预期 = 真实的机体角速度(索引3-5) + 陀螺仪零偏(索引6-8)
+    return x.segment<3>(3) + x.segment<3>(6);
+}
+
+// --- 接口：陀螺仪序贯更新 ---
+void AttitudeUKF::update_gyro(const Eigen::Vector3d& Z_gyro) {
+    // 1. 基于当前最新状态重新生成 19 个 Sigma 点
+    generateSigmaPoints();
+
+    // 2. 预测观测映射
+    Eigen::MatrixXd Z_sigma(3, n_sigma);
+    for (int i = 0; i < n_sigma; ++i) {
+        Z_sigma.col(i) = measurement_model_gyro(X_sigma.col(i));
+    }
+
+    // 3. 初始化并设定陀螺仪的固定观测噪声
+    // 陀螺仪通常很准，噪声设为一个较小的值，例如 0.01 rad/s
+    if (S_R_gyro.isZero()) { S_R_gyro = Eigen::Matrix3d::Identity() * 0.01; }
+
+    // 4. 召唤底层核心引擎，执行 QR 分解与 Cholesky 降维修正
+    measurement_update_core(Z_gyro, Z_sigma, S_R_gyro);
 }

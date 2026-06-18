@@ -3,7 +3,8 @@ project(aircraft_sim)
 
 set(CMAKE_CXX_STANDARD 17)
 
-add_executable(aircraft_sim main.cpp
+add_executable(aircraft_sim
+#        main.cpp
         RigidBody.cpp
         RigidBody.h
         BaseEffector.h
@@ -21,4 +22,6 @@ add_executable(aircraft_sim main.cpp
         BMI088_Sensor.cpp
         BMI088_Sensor.h
         AttitudeUKF.cpp
-        AttitudeUKF.h)
+        AttitudeUKF.h
+        NotchFilter.h
+        ukf_test.cpp)
