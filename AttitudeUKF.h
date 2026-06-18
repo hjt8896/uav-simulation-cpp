@@ -36,8 +36,8 @@ private:
     static Eigen::VectorXd compute_derivatives(const Eigen::VectorXd& x);
     static Eigen::VectorXd system_dynamics(const Eigen::VectorXd& state_in, double dt);
 
-    // 提取公共的 MRP 转 DCM 矩阵逻辑
-    static Eigen::Matrix3d mrp_to_dcm(const Eigen::Vector3d& sigma);
+    // // 提取公共的 MRP 转 DCM 矩阵逻辑
+    // static Eigen::Matrix3d mrp_to_dcm(const Eigen::Vector3d& sigma);
 
     // 分离的观测方程
     static Eigen::Vector3d measurement_model_accel(const Eigen::VectorXd& x);

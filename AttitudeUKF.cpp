@@ -3,6 +3,7 @@
 //
 
 #include "AttitudeUKF.h"
+#include "MathUtils.h"
 
 AttitudeUKF::AttitudeUKF() {
     x_hat = Eigen::VectorXd::Zero(n);
@@ -98,19 +99,19 @@ Eigen::VectorXd AttitudeUKF::compute_derivatives(const Eigen::VectorXd& x) {
     Eigen::Vector3d omega = x.segment<3>(3);
     Eigen::Vector3d bias  = x.segment<3>(6);
 
-    // 2. 计算 MRP 运动学矩阵 B(sigma)
-    double sigma_sq = sigma.squaredNorm();
-    Eigen::Matrix3d sigma_cross;
-    sigma_cross <<     0.0,  -sigma(2),   sigma(1),
-                  sigma(2),        0.0,  -sigma(0),
-                 -sigma(1),   sigma(0),        0.0;
-
-    Eigen::Matrix3d B = (1.0 - sigma_sq) * Eigen::Matrix3d::Identity()
-                      + 2.0 * sigma_cross
-                      + 2.0 * sigma * sigma.transpose();
-
+    // // 2. 计算 MRP 运动学矩阵 B(sigma)
+    // double sigma_sq = sigma.squaredNorm();
+    // Eigen::Matrix3d sigma_cross;
+    // sigma_cross <<     0.0,  -sigma(2),   sigma(1),
+    //               sigma(2),        0.0,  -sigma(0),
+    //              -sigma(1),   sigma(0),        0.0;
+    //
+    // Eigen::Matrix3d B = (1.0 - sigma_sq) * Eigen::Matrix3d::Identity()
+    //                   + 2.0 * sigma_cross
+    //                   + 2.0 * sigma * sigma.transpose();
+    // Eigen::Matrix3d B = MathUtils::mrp_B_matrix(sigma);
     // 3. 计算三组导数
-    Eigen::Vector3d sigma_dot = 0.25 * B * omega;
+    Eigen::Vector3d sigma_dot = MathUtils::mrp_kinematics(sigma,omega);
     Eigen::Vector3d omega_dot = Eigen::Vector3d::Zero(); // 短期恒定假设
 
     double T_c = 100.0; // FOGM 相关时间
@@ -192,31 +193,31 @@ Eigen::VectorXd AttitudeUKF::system_dynamics(const Eigen::VectorXd& state_in, co
     return state_in + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
 }
 
-// --- 物理映射：提取公共的 MRP 转 DCM ---
-Eigen::Matrix3d AttitudeUKF::mrp_to_dcm(const Eigen::Vector3d& sigma) {
-    double sigma_sq = sigma.squaredNorm();
-    double den = 1.0 + sigma_sq;
-    double den_sq = den * den;
-
-    Eigen::Matrix3d sigma_cross;
-    sigma_cross <<     0.0,  -sigma(2),   sigma(1),
-                  sigma(2),        0.0,  -sigma(0),
-                 -sigma(1),   sigma(0),        0.0;
-
-    return Eigen::Matrix3d::Identity()
-         - (4.0 * (1.0 - sigma_sq) / den_sq) * sigma_cross
-         + (8.0 / den_sq) * (sigma_cross * sigma_cross);
-}
+// // --- 物理映射：提取公共的 MRP 转 DCM ---
+// Eigen::Matrix3d AttitudeUKF::mrp_to_dcm(const Eigen::Vector3d& sigma) {
+//     double sigma_sq = sigma.squaredNorm();
+//     double den = 1.0 + sigma_sq;
+//     double den_sq = den * den;
+//
+//     Eigen::Matrix3d sigma_cross;
+//     sigma_cross <<     0.0,  -sigma(2),   sigma(1),
+//                   sigma(2),        0.0,  -sigma(0),
+//                  -sigma(1),   sigma(0),        0.0;
+//
+//     return Eigen::Matrix3d::Identity()
+//          - (4.0 * (1.0 - sigma_sq) / den_sq) * sigma_cross
+//          + (8.0 / den_sq) * (sigma_cross * sigma_cross);
+// }
 
 // --- 分离的观测方程 ---
 Eigen::Vector3d AttitudeUKF::measurement_model_accel(const Eigen::VectorXd& x) {
-    Eigen::Matrix3d R_NB = mrp_to_dcm(x.segment<3>(0));
+    Eigen::Matrix3d R_NB = MathUtils::mrp_to_dcm(x.segment<3>(0));
     Eigen::Vector3d f_N(0.0, 0.0, -9.81); // 桌面静止时，感受到的比力向上
     return R_NB * f_N;
 }
 
 Eigen::Vector3d AttitudeUKF::measurement_model_mag(const Eigen::VectorXd& x) {
-    Eigen::Matrix3d R_NB = mrp_to_dcm(x.segment<3>(0));
+    Eigen::Matrix3d R_NB = MathUtils::mrp_to_dcm(x.segment<3>(0));
     Eigen::Vector3d mag_N(0.22, 0.0, 0.45); // 地磁参考场 (随地理位置定)
     return R_NB * mag_N;
 }

@@ -10,6 +10,7 @@
 struct RigidBodyState {
     Eigen::Vector3d p;      // 惯性系位置
     Eigen::Vector3d v;      // 惯性系速度
+    Eigen::Vector3d a;      // 惯性系速度
     Eigen::Vector3d sigma;  // MRP 姿态 (Body to Inertial)
     Eigen::Vector3d omega;  // 机体坐标系下的角速度
 };

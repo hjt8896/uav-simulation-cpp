@@ -3,17 +3,17 @@
 //
 
 #include "MRPSteering.h"
-
-// 辅助函数：MRP 运动学 B 矩阵 (与 RigidBody 里的逻辑一致)
-Eigen::Matrix3d MRPSteering::BmatMRP(const Eigen::Vector3d& sigma) {
-    double s2 = sigma.squaredNorm();
-    Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
-    Eigen::Matrix3d S_tilde;
-    S_tilde <<  0, -sigma(2), sigma(1),
-                sigma(2), 0, -sigma(0),
-               -sigma(1), sigma(0), 0;
-    return (1.0 - s2) * I + 2.0 * S_tilde + 2.0 * sigma * sigma.transpose();
-}
+#include "MathUtils.h"
+// // 辅助函数：MRP 运动学 B 矩阵 (与 RigidBody 里的逻辑一致)
+// Eigen::Matrix3d MRPSteering::BmatMRP(const Eigen::Vector3d& sigma) {
+//     double s2 = sigma.squaredNorm();
+//     Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
+//     Eigen::Matrix3d S_tilde;
+//     S_tilde <<  0, -sigma(2), sigma(1),
+//                 sigma(2), 0, -sigma(0),
+//                -sigma(1), sigma(0), 0;
+//     return (1.0 - s2) * I + 2.0 * S_tilde + 2.0 * sigma * sigma.transpose();
+// }
 
 // 构造函数：带有一组比较温和的默认参数
 MRPSteering::MRPSteering(double k1, double k3, double w_max, bool ignore_ff)
@@ -29,7 +29,7 @@ void MRPSteering::set_gains(double k1, double k3, double w_max) {
 // 输出：期望角速度 omega_d，以及前馈角加速度 omega_d_dot
 void MRPSteering::compute_steering(const Eigen::Vector3d& sigma,
                       Eigen::Vector3d& omega_d,
-                      Eigen::Vector3d& omega_d_dot) {
+                      Eigen::Vector3d& omega_d_dot){
 
     // 1. 计算受限于 arctan 饱和曲线的期望角速度
     for (int i = 0; i < 3; ++i) {
@@ -45,8 +45,8 @@ void MRPSteering::compute_steering(const Eigen::Vector3d& sigma,
     // 2. 解析计算目标角加速度 (用于内环 SMC 的完美前馈)
     if (!ignore_feedforward) {
         // 利用 B 矩阵预测当前的姿态变化率 sigma_p
-        Eigen::Matrix3d B = BmatMRP(sigma);
-        Eigen::Vector3d sigma_p = 0.25 * B * omega_d;
+        // Eigen::Matrix3d B = BmatMRP(sigma);
+        Eigen::Vector3d sigma_p = MathUtils::mrp_kinematics(sigma,omega_d);
 
         // Basilisk Eq 21: 解析求导链式法则
         for (int i = 0; i < 3; ++i) {

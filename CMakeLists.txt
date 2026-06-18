@@ -24,4 +24,7 @@ add_executable(aircraft_sim
         AttitudeUKF.cpp
         AttitudeUKF.h
         NotchFilter.h
-        ukf_test.cpp)
+        MathUtils.cpp
+        MathUtils.h
+                ukf_test.cpp
+        )

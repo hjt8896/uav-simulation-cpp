@@ -11,15 +11,19 @@ void MotorEffector::set_speed(double speed) {
     omega_motor = speed;
 }
 
-// 核心：向飞船主体提交力与力矩贡献
+// 核心：向飞船主体提交力与力矩贡献 (严格遵守 FRD 前右下坐标系)
 void MotorEffector::updateContributions(double time, BackSubContributions& contrib, const RigidBodyState& state) {
-    // 推力
-    Eigen::Vector3d force_B(0, 0, k_f * omega_motor * omega_motor);
-    // 气动反扭矩
-    Eigen::Vector3d torque_aero_B(0, 0, -spin_dir * k_m * omega_motor * omega_motor);
-    // 偏航力矩
+    // 1. 推力 (朝向机体上方，所以是 -Z 方向！)
+    Eigen::Vector3d force_B(0, 0, -k_f * omega_motor * omega_motor);
+
+    // 2. 气动反扭矩 (CCW电机spin=1，产生CW反扭矩，FRD下CW是 +Z！)
+    Eigen::Vector3d torque_aero_B(0, 0, spin_dir * k_m * omega_motor * omega_motor);
+
+    // 3. 偏航力矩 (极其优雅！用叉乘 r x F 自动算出 Roll 和 Pitch 力矩！)
+    // 因为前面的 force_B 已经是 -Z 了，这里的叉乘算出来的符号绝对是对的！
     Eigen::Vector3d torque_thrust_B = pos_B.cross(force_B);
-    // 陀螺力矩 (注意这里使用 state.omega)
+
+    // 4. 陀螺力矩
     Eigen::Vector3d h_rotor(0, 0, Jr * spin_dir * omega_motor);
     Eigen::Vector3d torque_gyro_B = -state.omega.cross(h_rotor);
 

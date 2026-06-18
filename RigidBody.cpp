@@ -2,32 +2,11 @@
 // Created by hujiet on 2026/6/16.
 //
 #include "RigidBody.h"
-// ----------------- 数学辅助函数 -----------------
-// 向量叉乘的反对称矩阵
-Eigen::Matrix3d skew(const Eigen::Vector3d& v) {
-    Eigen::Matrix3d m;
-    m <<  0,   -v(2),  v(1),
-         v(2),  0,    -v(0),
-        -v(1),  v(0),  0;
-    return m;
-}
 
-// MRP 转换为 旋转矩阵 (Body 转换到 Inertial: R_NB)
-Eigen::Matrix3d mrp_to_dcm(const Eigen::Vector3d& sigma) {
-    double s2 = sigma.squaredNorm();
-    Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
-    Eigen::Matrix3d S = skew(sigma);
-    return I + (8.0 * S * S - 4.0 * (1.0 - s2) * S) / std::pow(1.0 + s2, 2);
-}
+#include <utility>
+#include "MathUtils.h"
 
-// MRP 运动学微分方程: dot(sigma) = f(sigma, omega)
-Eigen::Vector3d mrp_kinematics(const Eigen::Vector3d& sigma, const Eigen::Vector3d& omega) {
-    double s2 = sigma.squaredNorm();
-    Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
-    return 0.25 * ((1.0 - s2) * I + 2.0 * skew(sigma) + 2.0 * sigma * sigma.transpose()) * omega;
-}
-
-RigidBody::RigidBody(double mass, Eigen::Matrix3d inertia) : m(mass), I(inertia) {
+RigidBody::RigidBody(double mass, Eigen::Matrix3d inertia) : m(mass), I(std::move(inertia)) {
     state.p.setZero();
     state.v.setZero();
     state.sigma.setZero();
@@ -50,10 +29,10 @@ RigidBodyState RigidBody::compute_derivatives(double time, const RigidBodyState&
         eff->updateContributions(time, contrib, current_state);
     }
 
-    // 2. 引入重力 (机体坐标系下)
-    Eigen::Vector3d gravity_N(0, 0, -9.81);
-    Eigen::Matrix3d R_NB = mrp_to_dcm(current_state.sigma);
-    Eigen::Vector3d gravity_B = R_NB.transpose() * gravity_N;
+    // 2. 引入重力 (FRD机体坐标系下)
+    Eigen::Vector3d gravity_N(0, 0, 9.81);
+    Eigen::Matrix3d R_NB = MathUtils::mrp_to_dcm(current_state.sigma);
+    Eigen::Vector3d gravity_B = R_NB * gravity_N;
     contrib.vecTrans += m * gravity_B;
 
     // 3. 解牛顿-欧拉方程
@@ -65,7 +44,7 @@ RigidBodyState RigidBody::compute_derivatives(double time, const RigidBodyState&
     dot.v = R_NB * (contrib.vecTrans / m);
 
     // 旋转运动学 (MRP 微分)
-    dot.sigma = mrp_kinematics(current_state.sigma, current_state.omega);
+    dot.sigma = MathUtils::mrp_kinematics(current_state.sigma, current_state.omega);
     // 旋转动力学 (欧拉方程: I*dw + w x Iw = tau)
     dot.omega = I.inverse() * (contrib.vecRot - current_state.omega.cross(I * current_state.omega));
 
@@ -88,7 +67,8 @@ void RigidBody::step_rk4(double t, double dt) {
 
     // 累加更新状态
     state.p += (dt / 6.0) * (k1.p + 2*k2.p + 2*k3.p + k4.p);
-    state.v += (dt / 6.0) * (k1.v + 2*k2.v + 2*k3.v + k4.v);
+    state.a =  (k1.v + 2*k2.v + 2*k3.v + k4.v)/6.0;
+    state.v += dt * state.a;
     state.sigma += (dt / 6.0) * (k1.sigma + 2*k2.sigma + 2*k3.sigma + k4.sigma);
     state.omega += (dt / 6.0) * (k1.omega + 2*k2.omega + 2*k3.omega + k4.omega);
 

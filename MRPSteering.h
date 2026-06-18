@@ -20,7 +20,7 @@ private:
     bool ignore_feedforward; // 是否关闭前馈 (默认开启)
 
     // 辅助函数：MRP 运动学 B 矩阵 (与 RigidBody 里的逻辑一致)
-    static Eigen::Matrix3d BmatMRP(const Eigen::Vector3d& sigma);
+    // static Eigen::Matrix3d BmatMRP(const Eigen::Vector3d& sigma);
 
 public:
     // 构造函数：带有一组比较温和的默认参数
