@@ -113,7 +113,7 @@ int main() {
 
     AttitudeUKF ukf;
     Eigen::MatrixXd Q = Eigen::MatrixXd::Identity(9, 9);
-    Q.block<3,3>(0,0) *= 1e-8; Q.block<3,3>(3,3) *= 1e-6; Q.block<3,3>(6,6) *= 1e-8;
+    Q.block<3,3>(0,0) *= 1e-4; Q.block<3,3>(3,3) *= 1e-4; Q.block<3,3>(6,6) *= 1e-6;
     ukf.setProcessNoise(Q);
     BMI088_Sensor bmi088;
     // ==========================================
@@ -318,6 +318,7 @@ int main() {
             steering_real.compute_steering(current_mrp - dynamic_target_sigma, omega_d, omega_d_dot);
 
             omega_d(2) = 0.0;
+            omega_d_dot(2) = 0.0;
             Eigen::Vector3d tau_frd = smc.compute_torque(ukf.get_omega(), omega_d, omega_d_dot, dt);
             // ==========================================
             // [D] 执行器海关：极其严谨的神经重接！
