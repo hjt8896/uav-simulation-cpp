@@ -24,7 +24,7 @@ private:
 
 public:
     // 构造函数：带有一组比较温和的默认参数
-    MRPSteering(double k1 = 2.0, double k3 = 0.5, double w_max = 5.0, bool ignore_ff = false);
+    MRPSteering(double k1 = 10.0, double k3 = 2.5, double w_max = 5.0, bool ignore_ff = false);
 
     // 动态调整参数 (方便后续调参)
     void set_gains(double k1, double k3, double w_max);

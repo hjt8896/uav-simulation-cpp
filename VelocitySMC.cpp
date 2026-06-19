@@ -8,9 +8,15 @@
 #include "MathUtils.h"
 
 VelocitySMC::VelocitySMC(double vehicle_mass) : m(vehicle_mass) {
-    // 初始化速度滑模增益
-    K_v << 0.5, 0.5, 1.0;
-    W_v << 0.2, 0.2, 0.5;
+    // 1. 位置环刚度：赋予其极强的目标追踪欲望
+    K_pos = 0.05;
+
+    // 2. 边界层厚度：收紧边界，找回干脆利落的刹车手感
+    epsilon = 2.0;
+
+    // 3. 速度滑模增益：从老爷车升级为跑车！
+    K_v << 3.0, 3.0, 5.0;  // 之前是 0.5, 0.5, 1.0
+    W_v << 0.05, 0.05, 1.0;  // 之前是 0.2, 0.2, 0.5
 }
 
 double VelocitySMC::sat(double s) const {
@@ -34,7 +40,7 @@ void VelocitySMC::compute_control(const Eigen::Vector3d& p, const Eigen::Vector3
     // 2. 内环速度滑模控制器
     Eigen::Vector3d s_v = v - v_d; // 滑模面
 
-    Eigen::Vector3d v_d_dot = Eigen::Vector3d::Zero(); // 简化的期望加速度
+    Eigen::Vector3d v_d_dot = Eigen::Vector3d(0.5,0.5,0.5); // 简化的期望加速度
     Eigen::Vector3d g_N(0, 0, 9.81); // NED系下重力向下
 
     // 计算趋近律项

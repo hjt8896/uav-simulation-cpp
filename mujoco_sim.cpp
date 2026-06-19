@@ -16,6 +16,49 @@
 #include "MathUtils.h"
 #include "VelocitySMC.h"
 #include "MRPSteering.h"
+
+
+// ==========================================
+// [上帝视角] 全局指针与鼠标事件监听
+// ==========================================
+mjModel* m = nullptr;
+mjvCamera cam;
+mjvScene scn;
+
+bool button_left = false, button_middle = false, button_right = false;
+double lastx = 0, lasty = 0;
+
+void mouse_button(GLFWwindow* window, int button, int act, int mods) {
+    button_left = (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
+    button_middle = (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS);
+    button_right = (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
+    glfwGetCursorPos(window, &lastx, &lasty);
+}
+
+void mouse_move(GLFWwindow* window, double xpos, double ypos) {
+    // 只有按住鼠标按键时才移动视角
+    if (!button_left && !button_middle && !button_right) return;
+    double dx = xpos - lastx;
+    double dy = ypos - lasty;
+    lastx = xpos; lasty = ypos;
+
+    int width, height;
+    glfwGetWindowSize(window, &width, &height);
+
+    bool mod_shift = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
+    mjtMouse action;
+    if (button_right) action = mod_shift ? mjMOUSE_MOVE_H : mjMOUSE_MOVE_V;       // 右键平移
+    else if (button_left) action = mod_shift ? mjMOUSE_ROTATE_H : mjMOUSE_ROTATE_V; // 左键旋转
+    else action = mjMOUSE_ZOOM;                                                   // 中键缩放
+
+    // 驱动 MuJoCo 摄像机
+    mjv_moveCamera(m, action, dx/height, dy/height, &scn, &cam);
+}
+
+void scroll(GLFWwindow* window, double xoffset, double yoffset) {
+    mjv_moveCamera(m, mjMOUSE_ZOOM, 0, -0.05 * yoffset, &scn, &cam); // 滚轮缩放
+}
+
 int main() {
     std::cout << "--- 3D 可视化 SITL 启动 ---" << std::endl;
 
@@ -24,11 +67,14 @@ int main() {
     GLFWwindow* window = glfwCreateWindow(1200, 900, "SR-UKF 飞控可视化", NULL, NULL);
     if (!window) { glfwTerminate(); return 1; }
     glfwMakeContextCurrent(window);
+    glfwSetMouseButtonCallback(window, mouse_button);
+    glfwSetCursorPosCallback(window, mouse_move);
+    glfwSetScrollCallback(window, scroll);
     glfwSwapInterval(0); // 开启垂直同步 (大约 60Hz 刷新率)
 
     // 2. 加载 MuJoCo 模型
     char error[1000] = "Could not load XML model";
-    mjModel* m = mj_loadXML("quadcopter.xml", 0, error, 1000);
+     m = mj_loadXML("quadcopter.xml", 0, error, 1000);
     mjData* d = mj_makeData(m);
 
     static int pos_id    = mj_name2id(m, mjOBJ_SENSOR, "true_pos");
@@ -42,9 +88,8 @@ int main() {
     double* w_mj = &d->sensordata[m->sensor_adr[angvel_id]];
 
     // ★ 3. 初始化 MuJoCo 渲染数据结构
-    mjvCamera cam;                      // 摄像机
+
     mjvOption opt;                      // 渲染选项
-    mjvScene scn;                       // 3D 场景
     mjrContext con;                     // GPU 渲染上下文
 
     mjv_defaultCamera(&cam);
@@ -66,7 +111,7 @@ int main() {
 
     Mixer mixer(l, k_f, k_m, 100.0, 1000.0);
     // 实例化你的外环控制器
-    VelocitySMC outer_loop(mass);
+    // VelocitySMC outer_loop(mass);
     MRPSteering steering_real{};
     SMCController smc(inertia);
     AttitudeUKF ukf;
@@ -81,7 +126,7 @@ int main() {
     Eigen::Vector3d target_position(0.0, 0.0, -1.0); // 悬停在 1 米高空
 
     std::ofstream log("mujoco_sitl_log.csv");
-    log << "time,true_roll,ukf_roll,motor1,motor2,motor3,motor4\n";
+    log << "time,target_h,height,mrp_roll,target_mrp_roll,motor1,motor2,motor3,motor4\n";
 
     std::cout << "引擎点火！无人机正在 1 米高空尝试抵抗重力..." << std::endl;
     std::cout << "3D 视界已打开！准备渲染..." << std::endl;
@@ -126,31 +171,91 @@ int main() {
             Eigen::Vector4d current_quat(q_mj[0], q_mj[1], -q_mj[2], -q_mj[3]);
             Eigen::Matrix3d R_NB = MathUtils::QuatToRotationMatrix(current_quat).transpose();
             Eigen::Vector3d acc_true = acc_frd - R_NB * current_true_acc;
-            // ==========================================
-            // [B] 飞控大脑解算 (UKF + SMC)
-            // ==========================================
-            double dynamic_thrust = 0.0;
-            Eigen::Vector3d dynamic_target_sigma;
 
+           // ==========================================
+            // [B] 飞控大脑解算 (UKF + SMC) 与 飞行模式切换
+            // ==========================================
             double dt = m->opt.timestep;
-
             ukf.predict(dt);
             ukf.update_gyro(gyro_frd);
-            ukf.update_accel(acc_true); // MuJoCo极其牛逼，它的加速度计天然就包含了-g和机动加速度！
+            ukf.update_accel(acc_true);
 
-            // 1. 运行外环：由位置和速度误差，动态算出当前需要的推力和目标姿态！
-            outer_loop.compute_control(current_pos, current_vel, target_position, dt,
-                                       dynamic_thrust, dynamic_target_sigma);
+            // 定义两个飞控输出变量，交给内环
+            double dynamic_thrust = 0.0;
+            Eigen::Vector3d dynamic_target_sigma(0, 0, 0);
 
-            // 计算滑模控制力矩
+  // ----------------------------------------------------
+            // 模式 2：定高运动模式 (AltHold) - Z轴滑模闭环 + XY手动姿态
+            // ----------------------------------------------------
+
+            // =====================================
+            // 1. Z 轴位置 P 环 -> 生成期望下降速度 v_zd
+            // =====================================
+            double flight_speed_z = 3.0; // 最大升降速度 3m/s
+            if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) target_position(2) -= flight_speed_z * dt; // 目标高度升高 (-Z)
+            if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) target_position(2) += flight_speed_z * dt; // 目标高度降低 (+Z)
+
+            double K_pos_z = 3.0; // 位置环刚度
+            double err_z = current_pos(2) - target_position(2);
+            double v_zd = -K_pos_z * err_z;
+
+            // 限幅期望升降速度
+            v_zd = std::clamp(v_zd, -flight_speed_z, flight_speed_z);
+
+            // =====================================
+            // 2. Z 轴速度滑模环 (SMC) -> 计算理想垂直升力 F_z
+            // =====================================
+            double s_z = current_vel(2) - v_zd; // Z轴滑模面
+
+            // Z轴滑模暴躁参数
+            double K_vz = 5.0;   // 线性收敛增益
+            double W_vz = 3.0;   // 切换增益 (极其强悍的抗掉高能力)
+            double epsilon_z = 0.15; // 边界层厚度
+
+            // sat 函数内联计算
+            double sat_sz = s_z;
+            if (s_z > epsilon_z) sat_sz = 1.0;
+            else if (s_z < -epsilon_z) sat_sz = -1.0;
+            else sat_sz = s_z / epsilon_z;
+
+            // 计算绝对垂直向上力 (忽略 v_zd_dot 假设期望速度变化平缓)
+            // 注意 NED 系重力向下为正 9.81
+            double F_z = mass * 9.81 + mass * (K_vz * s_z + W_vz * sat_sz);
+
+            // =====================================
+            // 3. 姿态倾角补偿 (Tilt Compensation)
+            // =====================================
+            // R_NB(2,2) 完美等价于 cos(绝对倾角)
+            double cos_tilt = R_NB(2, 2);
+            if (cos_tilt < 0.3) cos_tilt = 0.3; // 极限防翻车保护
+
+            dynamic_thrust = F_z / cos_tilt;
+            // dynamic_thrust = std::clamp(dynamic_thrust, 0.0, 30.0); // 电机物理限幅
+
+            // =====================================
+            // 4. XY 轴人类试飞员接管 (直接映射目标姿态)
+            // =====================================
+            double max_tilt = 0.25; // 允许大约 15度 的狂暴倾角
+
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) dynamic_target_sigma(1) = max_tilt;  // 低头冲刺
+            else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) dynamic_target_sigma(1) = -max_tilt; // 仰头刹车/倒车
+            else dynamic_target_sigma(1) = 0;
+
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) dynamic_target_sigma(0) = -max_tilt; // 向左平移
+            else if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) dynamic_target_sigma(0) = max_tilt;  // 向右平移
+            else dynamic_target_sigma(0) = 0;
+            // ==========================================
+            // [内环] 直接接收 dynamic_thrust 和 dynamic_target_sigma
+            // ==========================================
             Eigen::Vector3d omega_d(0, 0, 0);
             Eigen::Vector3d omega_d_dot(0, 0, 0);
-
             Eigen::Vector3d current_mrp = ukf.get_mrp();
+
+            // 姿态环和角速度环照常运作，只是外环指令的来源变了
             steering_real.compute_steering(current_mrp - dynamic_target_sigma, omega_d, omega_d_dot);
 
+            omega_d(2) = 0.0;
             Eigen::Vector3d tau_frd = smc.compute_torque(ukf.get_omega(), omega_d, omega_d_dot, dt);
-
             // ==========================================
             // [C] 执行器海关：极其严谨的神经重接！
             // ==========================================
@@ -185,8 +290,10 @@ int main() {
             double true_omega1 = current_angvel(0);
             // 将时间、真实姿态、UKF姿态、四个电机转速打入 CSV
             log << current_time << ","
+                << -target_position(2) << ","
+                << -current_pos(2) << ","
                 << true_mrp_roll << ","
-                << current_mrp(0) << ","
+                << dynamic_target_sigma(0) << ","
                 << speeds[0] << "," << speeds[1] << "," << speeds[2] << "," << speeds[3] << "\n";
 
             mj_step(m, d); // 物理引擎推进 1ms

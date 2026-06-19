@@ -16,7 +16,7 @@
 // }
 
 // 构造函数：带有一组比较温和的默认参数
-MRPSteering::MRPSteering(double k1, double k3, double w_max, bool ignore_ff)
+MRPSteering::MRPSteering(const double k1, const double k3, const double w_max, const bool ignore_ff)
     : K1(k1), K3(k3), omega_max(w_max), ignore_feedforward(ignore_ff) {}
 
 // 动态调整参数 (方便后续调参)
@@ -57,6 +57,12 @@ void MRPSteering::compute_steering(const Eigen::Vector3d& sigma,
 
             double val = term1 / denominator;
             omega_d_dot(i) = -val * sigma_p(i);
+            // 假设你算出的原始目标角速度是 omega_d_raw
+            // 限制最大目标角速度为 3.0 rad/s (大约 170度/秒，极其灵敏但不会失控)
+            double max_rate = 3.0;
+            if (omega_d.norm() > max_rate) {
+                omega_d = omega_d.normalized() * max_rate;
+            }
         }
     }
 }
