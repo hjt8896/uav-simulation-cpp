@@ -317,8 +317,8 @@ int main() {
             // 姿态环和角速度环照常运作，只是外环指令的来源变了
             steering_real.compute_steering(current_mrp - dynamic_target_sigma, omega_d, omega_d_dot);
 
-            omega_d(2) = 0.0;
-            omega_d_dot(2) = 0.0;
+            // omega_d(2) = 0.0;
+            // omega_d_dot(2) = 0.0;
             Eigen::Vector3d tau_frd = smc.compute_torque(ukf.get_omega(), omega_d, omega_d_dot, dt);
             // ==========================================
             // [D] 执行器海关：极其严谨的神经重接！
