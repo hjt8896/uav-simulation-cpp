@@ -13,10 +13,12 @@
 #include "SMCController.h"
 #include "Mixer.h"
 #include "NotchFilter.h"
+#include "LowPassFilter.h"
 #include "MathUtils.h"
 #include "VelocitySMC.h"
 #include "MRPSteering.h"
 #include "AltitudeSMC.h"
+#include "BMI088_Sensor.h"
 
 // ==========================================
 // [上帝视角] 全局指针与鼠标事件监听
@@ -107,19 +109,58 @@ int main() {
     // 2. 初始化你的飞控大脑
     double mass = 1.0;
     Eigen::Matrix3d inertia = Eigen::Vector3d(0.01, 0.01, 0.02).asDiagonal();
-    double l = 0.2, k_f = 1e-5, k_m = 2e-7;
-    Mixer mixer(l, k_f, k_m, 100.0, 1000.0);
+    Eigen::Vector3d target_position(0.0, 0.0, -1.0); // 悬停在 1 米高空
+
+    AttitudeUKF ukf;
+    Eigen::MatrixXd Q = Eigen::MatrixXd::Identity(9, 9);
+    Q.block<3,3>(0,0) *= 1e-8; Q.block<3,3>(3,3) *= 1e-6; Q.block<3,3>(6,6) *= 1e-8;
+    ukf.setProcessNoise(Q);
+    BMI088_Sensor bmi088;
+    // ==========================================
+    // [物理净化] 初始化陷波滤波器 (Notch Filter)
+    // ==========================================
+    // NotchFilter notch_gyro[3];
+    // NotchFilter notch_acc[3];
+    //
+    // // 找准“病灶”：飞机悬停时电机转速约 500 rad/s
+    // // 换算成物理赫兹频率：500 / (2 * PI) ≈ 79.5 Hz
+    // float hover_freq_hz = 500.0 / (2.0 * M_PI);
+    // float sample_rate = 1000.0; // 我们的物理循环是 1ms (1000Hz)
+    // float Q_factor = 2.0;       // Q=2.0 意味着挖一个宽度适中的坑
+    //
+    // // 初始化 6 个通道的滤波器，专杀 79.5 Hz 的谐波！
+    // for (int i = 0; i < 3; ++i) {
+    //     notch_gyro[i].init(hover_freq_hz, sample_rate, Q_factor);
+    //     notch_acc[i].init(hover_freq_hz, sample_rate, Q_factor);
+    // }
+
+    // ==========================================
+    // [物理净化] 换装更坚固的低通防线 (LPF)
+    // ==========================================
+    LowPassFilter lpf_gyro[3];
+    LowPassFilter lpf_acc[3];
+
+    float sample_rate = 1000.0f;
+
+    // ★ 核心手术：对加速度计下狠手，对陀螺仪网开一面！
+    float acc_cutoff_hz = 30.0f;   // 彻底滤除所有电机高频震动，给 UKF 提供纯净重力向量
+    float gyro_cutoff_hz = 120.0f; // 保持极高的响应速度，坚决拒绝相位延迟！
+
+    for (int i = 0; i < 3; ++i) {
+        lpf_gyro[i].init(gyro_cutoff_hz, sample_rate);
+        lpf_acc[i].init(acc_cutoff_hz, sample_rate);
+    }
 
     AltitudeSMC alt_smc(mass);
     MRPSteering steering_real{};
     SMCController smc(inertia);
-    AttitudeUKF ukf;
-    Eigen::MatrixXd Q = Eigen::MatrixXd::Identity(9, 9);
-    Q.block<3,3>(0,0) *= 1e-6; Q.block<3,3>(3,3) *= 1e-4; Q.block<3,3>(6,6) *= 1e-8;
-    ukf.setProcessNoise(Q);
+
+    double l = 0.2, k_f = 1e-5, k_m = 2e-7;
+    Mixer mixer(l, k_f, k_m, 100.0, 1000.0);
+    // 初始假设四个电机都在悬停转速附近 (约 500 rad/s)
+    std::vector<double> current_motor_speeds = {500.0, 500.0, 500.0, 500.0};
 
     // 设定你期望无人机悬停的绝对 3D 空间坐标
-    Eigen::Vector3d target_position(0.0, 0.0, -1.0); // 悬停在 1 米高空
 
     std::ofstream log("mujoco_sitl_log.csv");
     log << "time,target_h,height,mrp_roll,target_mrp_roll,motor1,motor2,motor3,motor4\n";
@@ -170,12 +211,69 @@ int main() {
             Eigen::Vector3d acc_true = acc_frd - R_NB * current_true_acc;
 
             // ==========================================
-            // [B] 姿态解算滤波 (UKF)
+            // [A.4] 真实世界滤镜：注入高斯白噪声、零偏游走与高频振动
             // ==========================================
             double dt = m->opt.timestep;
+            // 现在的 acc_true 和 gyro_frd 是 MuJoCo 给的绝对真值，我们把它弄脏！
+            Eigen::Vector3d noisy_gyro = bmi088.read_gyro(gyro_frd, current_motor_speeds, current_time, dt);
+            Eigen::Vector3d noisy_acc = bmi088.read_acc(acc_true, current_motor_speeds, current_time);
+
+            // ==========================================
+            // [A.6] 罗盘上线：打破 Z 轴的不可观测诅咒！
+            // ==========================================
+            // 1. 模拟真实地磁场 (NED坐标系下，向北0.22，向下0.45，单位Gauss)
+            Eigen::Vector3d mag_N_true(0.22, 0.0, 0.45);
+
+            // 2. 将地球磁场转换到当前的真实机体坐标系
+            Eigen::Vector3d mag_B_true = R_NB * mag_N_true;
+
+            // 3. 加入一点点罗盘高斯白噪声 (快速手写一个简易噪声发生器)
+            Eigen::Vector3d noisy_mag = mag_B_true + Eigen::Vector3d(
+                ((double)rand() / RAND_MAX - 0.5) * 0.02,
+                ((double)rand() / RAND_MAX - 0.5) * 0.02,
+                ((double)rand() / RAND_MAX - 0.5) * 0.02
+            );
+
+            // ==========================================
+            // [A.5] 物理净化术：陷波滤波器洗掉机械震动
+            // ==========================================
+            // double avg_motor_speed = (current_motor_speeds[0] + current_motor_speeds[1] +
+            //                          current_motor_speeds[2] + current_motor_speeds[3]) / 4.0;
+            // float dynamic_freq_hz = avg_motor_speed / (2.0 * M_PI);
+            //
+            // // 限制一下最低频率防线，防止坠机停转时出现除零异常，
+            // // 或者频率太低误杀了真实的低频姿态变化 (通常 20Hz 以下是真实的物理运动)
+            // if (dynamic_freq_hz < 20.0f) dynamic_freq_hz = 20.0f;
+            //
+            // Eigen::Vector3d filtered_gyro;
+            // Eigen::Vector3d filtered_acc;
+            // for (int i = 0; i < 3; ++i) {
+            //     // 2. ★ 极其关键：每一毫秒都在根据电机实时转速，动态更新滤波器的“狙击中心”！
+            //     notch_gyro[i].init(dynamic_freq_hz, sample_rate, Q_factor);
+            //     notch_acc[i].init(dynamic_freq_hz, sample_rate, Q_factor);
+            //
+            //     // 3. 执行过滤
+            //     filtered_gyro(i) = notch_gyro[i].apply(noisy_gyro(i));
+            //     filtered_acc(i)  = notch_acc[i].apply(noisy_acc(i));
+            // }
+
+            // ==========================================
+            // [A.5] 物理净化术：全局低通滤波洗掉所有高频噪声
+            // ==========================================
+            Eigen::Vector3d filtered_gyro;
+            Eigen::Vector3d filtered_acc;
+            for (int i = 0; i < 3; ++i) {
+                filtered_gyro(i) = lpf_gyro[i].apply(noisy_gyro(i));
+                filtered_acc(i)  = lpf_acc[i].apply(noisy_acc(i));
+            }
+            // ==========================================
+            // [B] 姿态解算滤波 (UKF)
+            // ==========================================
             ukf.predict(dt);
-            ukf.update_gyro(gyro_frd);
-            ukf.update_accel(acc_true);
+            ukf.update_gyro(filtered_gyro);
+            ukf.update_accel(filtered_acc);
+            // 4. ★ 极其关键：喂给 UKF，让它终于能看见“北”了！
+            ukf.update_mag(noisy_mag);
 
             // ==========================================
             // [C]  SMC飞控 (高度和姿态闭环控制)
@@ -226,6 +324,7 @@ int main() {
             // ==========================================
             // 按照 Thrust, Roll, Pitch, Yaw 顺序传入期望力矩
             auto speeds = mixer.allocate(dynamic_thrust, tau_frd(0), tau_frd(1), tau_frd(2));
+            current_motor_speeds = speeds;
 
             // 直接按顺序写入 MuJoCo！再也不用在外部做恶心的索引映射了
             for (int i = 0; i < 4; ++i) {
@@ -233,7 +332,9 @@ int main() {
                 // 如果你的 XML <motor> 标签自带了 gear，你可能需要根据配置给 speeds，
                 // 咱们这里延续你之前的物理公式：
                 d->ctrl[i] = speeds[i] * speeds[i] * k_f;
+                // 更新当前电机转速，供下一毫秒的传感器震动模型使用！
             }
+
 
             if (current_time >= 0.5 && current_time <= 0.6) {
                 // qfrc_applied 是 MuJoCo 里的外力数组。

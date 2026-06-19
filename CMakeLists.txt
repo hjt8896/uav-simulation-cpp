@@ -36,6 +36,7 @@ add_executable(aircraft_sim
         VelocitySMC.h
         AltitudeSMC.cpp
         AltitudeSMC.h
+        LowPassFilter.h
         #                ukf_test.cpp
         )
 

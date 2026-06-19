@@ -9,7 +9,7 @@ BMI088_Sensor::BMI088_Sensor() : gen(std::random_device{}()),
                       acc_noise_dist(0.0, 0.054) {   // 加速度计本底白噪声 0.054 m/s^2
 
         // 陀螺仪初始化
-        constant_gyro_bias << 0.01, -0.005, 0.008; // 静态零偏 (rad/s)
+        constant_gyro_bias << 0.01, -0.005, 0.001; // 静态零偏 (rad/s)
         dynamic_gyro_bias.setZero();
 
         T_c = 100.0;
