@@ -34,6 +34,8 @@ add_executable(aircraft_sim
         mujoco_sim.cpp
         VelocitySMC.cpp
         VelocitySMC.h
+        AltitudeSMC.cpp
+        AltitudeSMC.h
         #                ukf_test.cpp
         )
 

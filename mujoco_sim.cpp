@@ -16,7 +16,7 @@
 #include "MathUtils.h"
 #include "VelocitySMC.h"
 #include "MRPSteering.h"
-
+#include "AltitudeSMC.h"
 
 // ==========================================
 // [上帝视角] 全局指针与鼠标事件监听
@@ -108,10 +108,9 @@ int main() {
     double mass = 1.0;
     Eigen::Matrix3d inertia = Eigen::Vector3d(0.01, 0.01, 0.02).asDiagonal();
     double l = 0.2, k_f = 1e-5, k_m = 2e-7;
-
     Mixer mixer(l, k_f, k_m, 100.0, 1000.0);
-    // 实例化你的外环控制器
-    // VelocitySMC outer_loop(mass);
+
+    AltitudeSMC alt_smc(mass);
     MRPSteering steering_real{};
     SMCController smc(inertia);
     AttitudeUKF ukf;
@@ -119,9 +118,6 @@ int main() {
     Q.block<3,3>(0,0) *= 1e-6; Q.block<3,3>(3,3) *= 1e-4; Q.block<3,3>(6,6) *= 1e-8;
     ukf.setProcessNoise(Q);
 
-    // 初始化阵风/目标变量
-    // double base_thrust = mass * 9.81;
-    // Eigen::Vector3d target_sigma(0, 0, 0);
     // 设定你期望无人机悬停的绝对 3D 空间坐标
     Eigen::Vector3d target_position(0.0, 0.0, -1.0); // 悬停在 1 米高空
 
@@ -184,66 +180,31 @@ int main() {
             double dynamic_thrust = 0.0;
             Eigen::Vector3d dynamic_target_sigma(0, 0, 0);
 
-  // ----------------------------------------------------
-            // 模式 2：定高运动模式 (AltHold) - Z轴滑模闭环 + XY手动姿态
-            // ----------------------------------------------------
+            // =====================================
+            // 1. Z 轴高度指令生成 (试飞员按键接管)
+            // =====================================
+            double flight_speed_z = 3.0; // 键盘设定的目标移动速度
+            if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) target_position(2) -= flight_speed_z * dt;
+            if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) target_position(2) += flight_speed_z * dt;
 
             // =====================================
-            // 1. Z 轴位置 P 环 -> 生成期望下降速度 v_zd
+            // 2. 独立 Z 轴滑模定高控制器 (黑盒调用)
             // =====================================
-            double flight_speed_z = 3.0; // 最大升降速度 3m/s
-            if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) target_position(2) -= flight_speed_z * dt; // 目标高度升高 (-Z)
-            if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) target_position(2) += flight_speed_z * dt; // 目标高度降低 (+Z)
-
-            double K_pos_z = 3.0; // 位置环刚度
-            double err_z = current_pos(2) - target_position(2);
-            double v_zd = -K_pos_z * err_z;
-
-            // 限幅期望升降速度
-            v_zd = std::clamp(v_zd, -flight_speed_z, flight_speed_z);
-
-            // =====================================
-            // 2. Z 轴速度滑模环 (SMC) -> 计算理想垂直升力 F_z
-            // =====================================
-            double s_z = current_vel(2) - v_zd; // Z轴滑模面
-
-            // Z轴滑模暴躁参数
-            double K_vz = 5.0;   // 线性收敛增益
-            double W_vz = 3.0;   // 切换增益 (极其强悍的抗掉高能力)
-            double epsilon_z = 0.15; // 边界层厚度
-
-            // sat 函数内联计算
-            double sat_sz = s_z;
-            if (s_z > epsilon_z) sat_sz = 1.0;
-            else if (s_z < -epsilon_z) sat_sz = -1.0;
-            else sat_sz = s_z / epsilon_z;
-
-            // 计算绝对垂直向上力 (忽略 v_zd_dot 假设期望速度变化平缓)
-            // 注意 NED 系重力向下为正 9.81
-            double F_z = mass * 9.81 + mass * (K_vz * s_z + W_vz * sat_sz);
-
-            // =====================================
-            // 3. 姿态倾角补偿 (Tilt Compensation)
-            // =====================================
-            // R_NB(2,2) 完美等价于 cos(绝对倾角)
             double cos_tilt = R_NB(2, 2);
-            if (cos_tilt < 0.3) cos_tilt = 0.3; // 极限防翻车保护
-
-            dynamic_thrust = F_z / cos_tilt;
-            // dynamic_thrust = std::clamp(dynamic_thrust, 0.0, 30.0); // 电机物理限幅
+            dynamic_thrust = alt_smc.compute_thrust(current_pos(2), target_position(2), current_vel(2), cos_tilt);
 
             // =====================================
-            // 4. XY 轴人类试飞员接管 (直接映射目标姿态)
+            // 3. XY 轴人类试飞员接管 (直接映射目标姿态)
             // =====================================
-            double max_tilt = 0.25; // 允许大约 15度 的狂暴倾角
-
-            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) dynamic_target_sigma(1) = max_tilt;  // 低头冲刺
-            else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) dynamic_target_sigma(1) = -max_tilt; // 仰头刹车/倒车
+            double max_tilt = 0.25;
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) dynamic_target_sigma(1) = max_tilt;
+            else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) dynamic_target_sigma(1) = -max_tilt;
             else dynamic_target_sigma(1) = 0;
 
-            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) dynamic_target_sigma(0) = -max_tilt; // 向左平移
-            else if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) dynamic_target_sigma(0) = max_tilt;  // 向右平移
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) dynamic_target_sigma(0) = -max_tilt;
+            else if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) dynamic_target_sigma(0) = max_tilt;
             else dynamic_target_sigma(0) = 0;
+
             // ==========================================
             // [内环] 直接接收 dynamic_thrust 和 dynamic_target_sigma
             // ==========================================
