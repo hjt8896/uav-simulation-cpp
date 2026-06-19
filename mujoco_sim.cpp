@@ -146,6 +146,7 @@ int main() {
             Eigen::Vector3d acc_frd(acc_mj(0), -acc_mj(1), -acc_mj(2));
             Eigen::Vector3d gyro_frd(gyro_mj(0), -gyro_mj(1), -gyro_mj(2));
 
+
             // freejoint 的前 3 个 DOF 永远是世界系 (ENU) 下的线加速度
             double true_acc_x_mj = d->qacc[0];
             double true_acc_y_mj = d->qacc[1];
@@ -168,14 +169,17 @@ int main() {
             Eigen::Matrix3d R_NB = MathUtils::QuatToRotationMatrix(current_quat).transpose();
             Eigen::Vector3d acc_true = acc_frd - R_NB * current_true_acc;
 
-           // ==========================================
-            // [B] 飞控大脑解算 (UKF + SMC) 与 飞行模式切换
+            // ==========================================
+            // [B] 姿态解算滤波 (UKF)
             // ==========================================
             double dt = m->opt.timestep;
             ukf.predict(dt);
             ukf.update_gyro(gyro_frd);
             ukf.update_accel(acc_true);
 
+            // ==========================================
+            // [C]  SMC飞控 (高度和姿态闭环控制)
+            // ==========================================
             // 定义两个飞控输出变量，交给内环
             double dynamic_thrust = 0.0;
             Eigen::Vector3d dynamic_target_sigma(0, 0, 0);
@@ -218,7 +222,7 @@ int main() {
             omega_d(2) = 0.0;
             Eigen::Vector3d tau_frd = smc.compute_torque(ukf.get_omega(), omega_d, omega_d_dot, dt);
             // ==========================================
-            // [C] 执行器海关：极其严谨的神经重接！
+            // [D] 执行器海关：极其严谨的神经重接！
             // ==========================================
             // 按照 Thrust, Roll, Pitch, Yaw 顺序传入期望力矩
             auto speeds = mixer.allocate(dynamic_thrust, tau_frd(0), tau_frd(1), tau_frd(2));
