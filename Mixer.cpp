@@ -1,53 +1,43 @@
-//
-// Created by hujiet on 2026/6/16.
-//
-
 #include "Mixer.h"
+#include <cmath>
+#include <algorithm>
 
-Mixer::Mixer(const double l, const double k_f, const double k_m, const double min_w = 100.0, const double max_w = 1000.0)
-        : min_omega(min_w), max_omega(max_w) {
+Mixer::Mixer(double arm_length, double k_f, double k_m, double min_speed, double max_speed)
+    : l_(arm_length), k_f_(k_f), k_m_(k_m), min_speed_(min_speed), max_speed_(max_speed) {
 
-    // 1. 严格基于 FRD(前右下) 的控制分配矩阵
-    // 顺序与 main.cpp 保持绝对一致:
-    // M1( l,  l, CCW=1), M2(-l, -l, CCW=1)
-    // M3( l, -l,  CW=-1), M4(-l,  l,  CW=-1)
-    M <<
-        // 行1：总推力需求 (系数全是正，因为外环要的是推力大小)
-         k_f,      k_f,      k_f,      k_f,
+    double c = k_m_ / k_f_;
+    
+    // 构建正向推力映射矩阵 M
+    // 顺序严格对应咱们的设定: 0:FR(前右), 1:RR(后右), 2:RL(后左), 3:FL(前左)
+    Eigen::Matrix4d M;
+    M <<  1.0,  1.0,  1.0,  1.0,   // 总推力 (4个电机齐心协力)
+         -l_,  -l_,   l_,   l_,    // Roll (右侧FR/RR用力，右边抬起，飞机向左倒，即负Roll)
+          l_,  -l_,  -l_,   l_,    // ★ Pitch (前侧FR/FL用力，机头抬起，即正Pitch)
+          c,   -c,    c,   -c;     // ★ Yaw (FR逆时针转，给机身顺时针的正向反扭力矩)
 
-        // 行2：Roll 力矩 (右侧 M1, M4 推力导致负 Roll，左侧 M2, M3 导致正 Roll)
-        -k_f * l,  k_f * l,  k_f * l, -k_f * l,
-
-        // 行3：Pitch 力矩 (前方 M1, M3 推力导致正 Pitch，后方 M2, M4 导致负 Pitch)
-         k_f * l, -k_f * l,  k_f * l, -k_f * l,
-
-        // 行4：Yaw 力矩 (CCW 的 M1, M2 产生正 Yaw，CW 的 M3, M4 产生负 Yaw)
-         k_m,      k_m,     -k_m,     -k_m;
-
-    // 2. 预计算逆矩阵
-    M_inv = M.inverse();
+    // 飞控核心逻辑：求逆！得到控制分配矩阵
+    allocation_matrix_inv_ = M.inverse();
 }
 
-// 核心分配函数：输入目标推力与力矩，输出 4 个电机的目标转速
-std::vector<double> Mixer::allocate(double Fz, double tau_phi, double tau_theta, double tau_psi) const
-{
-    Eigen::Vector4d control_input(Fz, tau_phi, tau_theta, tau_psi);
+std::vector<double> Mixer::allocate(double thrust, double tau_phi, double tau_theta, double tau_psi) {
+    // 1. 组装期望指令向量
+    Eigen::Vector4d commands(thrust, tau_phi, tau_theta, tau_psi);
 
-    // 解算目标转速的平方
-    Eigen::Vector4d omega_sq = M_inv * control_input;
+    // 2. 矩阵乘法：一键解算出四个电机所需的绝对物理推力 (Newtons)
+    Eigen::Vector4d forces = allocation_matrix_inv_ * commands;
 
-    std::vector<double> motor_speeds(4, 0.0);
-
+    // 3. 换算转速并进行极其严格的安全限幅
+    std::vector<double> speeds(4);
     for (int i = 0; i < 4; ++i) {
-        // 3. 饱和处理逻辑 (极其重要！)
-        // 如果算出负的平方，说明指令越界，强制归零保护
-        double sq_val = std::max(0.0, omega_sq(i));
-        double speed = std::sqrt(sq_val);
-
-        // 限制在电机的物理边界内
-        speed = std::clamp(speed, min_omega, max_omega);
-        motor_speeds[i] = speed;
+        // 防止负推力 (电机不可能反转吹风)
+        double f = std::max(0.0, forces(i)); 
+        
+        // 推力转角速度 (omega = sqrt(F / k_f))
+        double speed = std::sqrt(f / k_f_);  
+        
+        // C++17 的 clamp 优雅限幅，防止转速爆表或停转
+        speeds[i] = std::clamp(speed, min_speed_, max_speed_);
     }
 
-    return motor_speeds;
+    return speeds;
 }
