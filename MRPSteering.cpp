@@ -27,10 +27,17 @@ void MRPSteering::set_gains(double k1, double k3, double w_max) {
 // 核心计算逻辑：外环 200Hz 或 1000Hz 调用
 // 输入：当前姿态误差 sigma (本文假设目标姿态为 0，所以误差即为当前 sigma)
 // 输出：期望角速度 omega_d，以及前馈角加速度 omega_d_dot
-void MRPSteering::compute_steering(const Eigen::Vector3d& sigma,
+void MRPSteering::compute_steering(Eigen::Vector3d sigma,
                       Eigen::Vector3d& omega_d,
                       Eigen::Vector3d& omega_d_dot){
+    // ★ 核心修复：MRP 影子集切换 (Shadow Set Switching)
+    double sigma_sq = sigma.squaredNorm();
 
+    // 如果模长平方大于 1 (意味着误差角超过 180 度)
+    // 立即映射到影子集，保证它走最短路径，且绝对不会撞上 360 度奇异点
+    if (sigma_sq > 1.0) {
+        sigma = -sigma / sigma_sq;
+    }
     // 1. 计算受限于 arctan 饱和曲线的期望角速度
     for (int i = 0; i < 3; ++i) {
         double sig = sigma(i);

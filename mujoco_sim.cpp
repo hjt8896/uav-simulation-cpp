@@ -19,6 +19,7 @@
 #include "MRPSteering.h"
 #include "AltitudeSMC.h"
 #include "BMI088_Sensor.h"
+#include "USQUE.h"
 
 // ==========================================
 // [上帝视角] 全局指针与鼠标事件监听
@@ -110,8 +111,9 @@ int main() {
     double mass = 1.0;
     Eigen::Matrix3d inertia = Eigen::Vector3d(0.01, 0.01, 0.02).asDiagonal();
     Eigen::Vector3d target_position(0.0, 0.0, -1.0); // 悬停在 1 米高空
+    Eigen::Vector3d dynamic_target_sigma(0, 0, 0);
 
-    AttitudeUKF ukf;
+    USQUE ukf;
     Eigen::MatrixXd Q = Eigen::MatrixXd::Identity(9, 9);
     Q.block<3,3>(0,0) *= 1e-4; Q.block<3,3>(3,3) *= 1e-4; Q.block<3,3>(6,6) *= 1e-6;
     ukf.setProcessNoise(Q);
@@ -163,11 +165,14 @@ int main() {
     // 设定你期望无人机悬停的绝对 3D 空间坐标
 
     std::ofstream log("mujoco_sitl_log.csv");
-    log << "time,target_h,height,mrp_roll,target_mrp_roll,motor1,motor2,motor3,motor4\n";
+    log << "time,target_z,pos_z,"
+           "true_roll,target_roll,ukf_roll,true_pitch,target_pitch,ukf_pitch,true_yaw,target_yaw,ukf_yaw,"
+           "true_omegax,target_omegax,ukf_omegax,true_omegay,target_omegay,ukf_omegay,true_omegaz,target_omegaz,ukf_omegaz,"
+           "motor1,motor2,motor3,motor4\n";
 
     std::cout << "引擎点火！无人机正在 1 米高空尝试抵抗重力..." << std::endl;
     std::cout << "3D 视界已打开！准备渲染..." << std::endl;
-
+    // double yaw = 0.0;
     // 4. ★ 核心：图形化主循环
     while (!glfwWindowShouldClose(window)) {
         // 计算渲染同步时间
@@ -202,7 +207,7 @@ int main() {
             // X轴不变，Y轴和Z轴必须取反！
             Eigen::Vector3d current_pos(p_mj[0], -p_mj[1], -p_mj[2]);
             Eigen::Vector3d current_vel(v_mj[0], -v_mj[1], -v_mj[2]);
-            Eigen::Vector3d current_angvel(w_mj[0], -w_mj[1], -w_mj[2]);
+            // Eigen::Vector3d current_angvel(w_mj[0], -w_mj[1], -w_mj[2]);
 
             // 四元数翻转 (qw, qx, qy, qz) -> ENU转NED
             // 四元数的标量 qw 不变，X不变，Y和Z取反
@@ -235,29 +240,6 @@ int main() {
             );
 
             // ==========================================
-            // [A.5] 物理净化术：陷波滤波器洗掉机械震动
-            // ==========================================
-            // double avg_motor_speed = (current_motor_speeds[0] + current_motor_speeds[1] +
-            //                          current_motor_speeds[2] + current_motor_speeds[3]) / 4.0;
-            // float dynamic_freq_hz = avg_motor_speed / (2.0 * M_PI);
-            //
-            // // 限制一下最低频率防线，防止坠机停转时出现除零异常，
-            // // 或者频率太低误杀了真实的低频姿态变化 (通常 20Hz 以下是真实的物理运动)
-            // if (dynamic_freq_hz < 20.0f) dynamic_freq_hz = 20.0f;
-            //
-            // Eigen::Vector3d filtered_gyro;
-            // Eigen::Vector3d filtered_acc;
-            // for (int i = 0; i < 3; ++i) {
-            //     // 2. ★ 极其关键：每一毫秒都在根据电机实时转速，动态更新滤波器的“狙击中心”！
-            //     notch_gyro[i].init(dynamic_freq_hz, sample_rate, Q_factor);
-            //     notch_acc[i].init(dynamic_freq_hz, sample_rate, Q_factor);
-            //
-            //     // 3. 执行过滤
-            //     filtered_gyro(i) = notch_gyro[i].apply(noisy_gyro(i));
-            //     filtered_acc(i)  = notch_acc[i].apply(noisy_acc(i));
-            // }
-
-            // ==========================================
             // [A.5] 物理净化术：全局低通滤波洗掉所有高频噪声
             // ==========================================
             Eigen::Vector3d filtered_gyro;
@@ -280,7 +262,6 @@ int main() {
             // ==========================================
             // 定义两个飞控输出变量，交给内环
             double dynamic_thrust = 0.0;
-            Eigen::Vector3d dynamic_target_sigma(0, 0, 0);
 
             // =====================================
             // 1. Z 轴高度指令生成 (试飞员按键接管)
@@ -298,28 +279,70 @@ int main() {
             // =====================================
             // 3. XY 轴人类试飞员接管 (直接映射目标姿态)
             // =====================================
-            double max_tilt = 0.25;
-            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) dynamic_target_sigma(1) = max_tilt;
-            else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) dynamic_target_sigma(1) = -max_tilt;
-            else dynamic_target_sigma(1) = 0;
+            // =====================================
+            // [纯解析架构]：基于 Eq 3.147 的姿态指令重构
+            // =====================================
+            Eigen::Vector4d ukf_quat = ukf.get_quaternion();
+            Eigen::Vector3d current_mrp = MathUtils::quaternion_to_mrp(ukf_quat);
+            Eigen::Vector4d q_safe = current_quat;
+            if (q_safe(0) < 0.0) { q_safe = -q_safe; }
+            // Eigen::Vector3d current_mrp = ukf.get_mrp();
+            // 提取物理引擎的上帝视角真值
+            Eigen::Vector3d true_mrp = Eigen::Vector3d(q_safe(1), q_safe(2), q_safe(3)) / (1.0 + q_safe(0));
+            // 1. 提取当前 Yaw，并构造出“基础 MRP” (sigma_prime)
+            Eigen::Matrix3d R_NB_ukf = MathUtils::mrp_to_dcm(current_mrp).transpose();
+            double current_yaw = std::atan2(R_NB_ukf(1, 0), R_NB_ukf(0, 0));
+            // 纯 Yaw 旋转的 MRP 极其简单：[0, 0, tan(theta/4)]
+            Eigen::Vector3d sigma_base(0, 0, std::tan(current_yaw / 4.0));
 
-            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) dynamic_target_sigma(0) = -max_tilt;
-            else if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) dynamic_target_sigma(0) = max_tilt;
-            else dynamic_target_sigma(0) = 0;
+            // 2. 接收人类的相对指令
+            double cmd_roll = 0.0, cmd_pitch = 0.0, yaw_rate_cmd = 0.0;
+            double max_angle = 0.3;
+
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) cmd_pitch =  max_angle;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) cmd_pitch = -max_angle;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) cmd_roll  = -max_angle;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) cmd_roll  =  max_angle;
+            // if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) yaw   -= 0.001;
+            // if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) yaw   +=  0.001;
+
+            // 3. 将人类指令转化为“期望指令 MRP” (sigma_double_prime)
+            // 因为 Roll 和 Pitch 是小角度独立指令，我们可以快速构造
+            Eigen::Vector3d sigma_cmd;
+            sigma_cmd=MathUtils::mrp_switchto_shadow(sigma_cmd);
+            sigma_cmd(0) = std::tan(cmd_roll / 4.0);
+            sigma_cmd(1) = std::tan(cmd_pitch / 4.0);
+            sigma_cmd(2) = 0;
+
+            // 4. ★ 圣经降临：用公式 3.147 瞬间完成非线性叠加！
+            dynamic_target_sigma = MathUtils::mrp_add(sigma_base, sigma_cmd);
+
 
             // ==========================================
             // [内环] 直接接收 dynamic_thrust 和 dynamic_target_sigma
             // ==========================================
             Eigen::Vector3d omega_d(0, 0, 0);
             Eigen::Vector3d omega_d_dot(0, 0, 0);
-            Eigen::Vector3d current_mrp = ukf.get_mrp();
 
+
+            Eigen::Vector3d mrp_err = MathUtils::mrp_add(-dynamic_target_sigma, current_mrp);
+            // 5. 永远不要忘了套上一层影子集结界
+            mrp_err = MathUtils::mrp_switchto_shadow(mrp_err);
             // 姿态环和角速度环照常运作，只是外环指令的来源变了
-            steering_real.compute_steering(current_mrp - dynamic_target_sigma, omega_d, omega_d_dot);
+            steering_real.compute_steering(mrp_err, omega_d, omega_d_dot);
 
-            // omega_d(2) = 0.0;
-            // omega_d_dot(2) = 0.0;
-            Eigen::Vector3d tau_frd = smc.compute_torque(ukf.get_omega(), omega_d, omega_d_dot, dt);
+            // 2. ★ 偏航轴夺权：剥夺 MRPSteering 对 Z 轴的控制权！
+            // 直接把人类的摇杆输入（或高级算法）转化为期望偏航角速度
+            if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) yaw_rate_cmd = -1.0; // 每秒转 1 rad
+            if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) yaw_rate_cmd =  1.0;
+
+            omega_d(2) = yaw_rate_cmd;     // 注入角速度指令
+            // omega_d_dot(0) = 0.0;          // 匀速转弯，前馈角加速度为 0
+            // omega_d_dot(1) = 0.0;          // 匀速转弯，前馈角加速度为 0
+            omega_d_dot(2) = 0.0;          // 匀速转弯，前馈角加速度为 0
+
+            Eigen::Vector3d current_omega = ukf.get_omega();
+            Eigen::Vector3d tau_frd = smc.compute_torque(current_omega, omega_d, omega_d_dot, dt);
             // ==========================================
             // [D] 执行器海关：极其严谨的神经重接！
             // ==========================================
@@ -345,22 +368,24 @@ int main() {
                 d->qfrc_applied[3] = 0.0; // 风停
             }
 
+// ==========================================
+            // [E] 记录日志：全维度姿态真值与 UKF 估计提取
             // ==========================================
-            // [E] 记录日志：上帝视角的真值 vs UKF 估计值
-            // ==========================================
-            // 从绝对真值四元数 (NED系) 提取真实的 MRP Roll (sigma_x)
-            // current_quat 是 [qw, qx, qy, qz]
-            double qw_true = current_quat(0);
-            double qx_true = current_quat(1);
-            // MRP 的经典转换公式：sigma = q_vec / (1 + q_scalar)
-            double true_mrp_roll = qx_true / (1.0 + qw_true);
-            double true_omega1 = current_angvel(0);
-            // 将时间、真实姿态、UKF姿态、四个电机转速打入 CSV
+
+
+            // 提取飞控大脑的 UKF 估计值
+            Eigen::Vector3d ukf_mrp = current_mrp;
+            Eigen::Vector3d ukf_omega = ukf.get_omega();
+            // 写入日志
             log << current_time << ","
-                << -target_position(2) << ","
-                << -current_pos(2) << ","
-                << true_mrp_roll << ","
-                << dynamic_target_sigma(0) << ","
+                << -target_position(2) << "," << -current_pos(2) << ","
+                << true_mrp(0) << "," << mrp_err(0) << "," << ukf_mrp(0) << "," // Roll 组
+                << true_mrp(1) << "," << mrp_err(1) << "," << ukf_mrp(1) << "," // Pitch 组
+                << true_mrp(2) << "," << mrp_err(2) << "," << ukf_mrp(2) << "," // Yaw 组
+
+                << gyro_frd(0) << "," << omega_d(0) << "," << ukf_omega(0) << "," // Roll 组
+                << gyro_frd(1) << "," << omega_d(1) << "," << ukf_omega(1) << "," // Pitch 组
+                << gyro_frd(2) << "," << omega_d(2) << "," << ukf_omega(2) << "," // Yaw 组
                 << speeds[0] << "," << speeds[1] << "," << speeds[2] << "," << speeds[3] << "\n";
 
             mj_step(m, d); // 物理引擎推进 1ms

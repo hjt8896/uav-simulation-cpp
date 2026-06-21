@@ -3,7 +3,7 @@
 //
 
 #include "AttitudeUKF.h"
-#include "MathUtils.h"
+
 
 AttitudeUKF::AttitudeUKF() {
     x_hat = Eigen::VectorXd::Zero(n);
@@ -99,17 +99,6 @@ Eigen::VectorXd AttitudeUKF::compute_derivatives(const Eigen::VectorXd& x) {
     Eigen::Vector3d omega = x.segment<3>(3);
     Eigen::Vector3d bias  = x.segment<3>(6);
 
-    // // 2. 计算 MRP 运动学矩阵 B(sigma)
-    // double sigma_sq = sigma.squaredNorm();
-    // Eigen::Matrix3d sigma_cross;
-    // sigma_cross <<     0.0,  -sigma(2),   sigma(1),
-    //               sigma(2),        0.0,  -sigma(0),
-    //              -sigma(1),   sigma(0),        0.0;
-    //
-    // Eigen::Matrix3d B = (1.0 - sigma_sq) * Eigen::Matrix3d::Identity()
-    //                   + 2.0 * sigma_cross
-    //                   + 2.0 * sigma * sigma.transpose();
-    // Eigen::Matrix3d B = MathUtils::mrp_B_matrix(sigma);
     // 3. 计算三组导数
     Eigen::Vector3d sigma_dot = MathUtils::mrp_kinematics(sigma,omega);
     Eigen::Vector3d omega_dot = Eigen::Vector3d::Zero(); // 短期恒定假设
@@ -121,6 +110,30 @@ Eigen::VectorXd AttitudeUKF::compute_derivatives(const Eigen::VectorXd& x) {
     Eigen::VectorXd x_dot(n);
     x_dot << sigma_dot, omega_dot, bias_dot;
     return x_dot;
+}
+
+void AttitudeUKF::check_mrp_shadow_set() {
+    Eigen::Vector3d sigma = x_hat.segment<3>(0);
+    double sq_norm = sigma.squaredNorm();
+
+    // 如果 MRP 向量摸到了 180 度的边界，立刻执行空间折叠！
+    if (sq_norm > 1.0) {
+        // 1. 状态向量的影子集切换 (跳回单位球内部)
+        x_hat.segment<3>(0) = -sigma / sq_norm;
+
+        // 2. 修正后的 Jacobian 矩阵 (注意前方的负号)
+        Eigen::Matrix3d J = -(1.0 / sq_norm) * Eigen::Matrix3d::Identity() +
+                            (2.0 / (sq_norm * sq_norm)) * sigma * sigma.transpose();
+
+        // 3. 将 Jacobian 作用于状态协方差平方根 S 的前 3 行
+        S.block<3, n>(0, 0) = J * S.block<3, n>(0, 0);
+
+        // 4. ★ 绝杀补丁：重新三角化 S 矩阵
+        // 因为乘了 J 之后 S 不再是下三角了，必须通过 QR 分解重新洗回下三角。
+        // S_new * S_new^T 保持不变，S 重新恢复纯洁的下三角形态。
+        Eigen::HouseholderQR<Eigen::MatrixXd> qr(S.transpose());
+        S = qr.matrixQR().triangularView<Eigen::Upper>().transpose();
+    }
 }
 
  // 初始化时设定过程噪声
@@ -177,8 +190,10 @@ void AttitudeUKF::predict(double dt) {
     cholDownDate(S_bar, err_0, wC(0)); // wC(0) 是那个巨大的负数
 
     // 6. 更新系统状态，准备进入观测更新
+    // x_bar.segment<3>(0) = MathUtils::mrp_switchto_shadow(x_bar.segment<3>(0));
     x_hat = x_bar;
     S = S_bar;
+    // check_mrp_shadow_set();
 }
 
 // 留给你的物理引擎接口
@@ -192,22 +207,6 @@ Eigen::VectorXd AttitudeUKF::system_dynamics(const Eigen::VectorXd& state_in, co
     // 返回积分后的下一个状态
     return state_in + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
 }
-
-// // --- 物理映射：提取公共的 MRP 转 DCM ---
-// Eigen::Matrix3d AttitudeUKF::mrp_to_dcm(const Eigen::Vector3d& sigma) {
-//     double sigma_sq = sigma.squaredNorm();
-//     double den = 1.0 + sigma_sq;
-//     double den_sq = den * den;
-//
-//     Eigen::Matrix3d sigma_cross;
-//     sigma_cross <<     0.0,  -sigma(2),   sigma(1),
-//                   sigma(2),        0.0,  -sigma(0),
-//                  -sigma(1),   sigma(0),        0.0;
-//
-//     return Eigen::Matrix3d::Identity()
-//          - (4.0 * (1.0 - sigma_sq) / den_sq) * sigma_cross
-//          + (8.0 / den_sq) * (sigma_cross * sigma_cross);
-// }
 
 // --- 分离的观测方程 ---
 Eigen::Vector3d AttitudeUKF::measurement_model_accel(const Eigen::VectorXd& x) {
@@ -258,12 +257,13 @@ void AttitudeUKF::measurement_update_core(const Eigen::Vector3d& Z_actual, const
 
     // 5. 状态更新
     x_hat = x_hat + K * (Z_actual - z_hat);
-
+    // x_hat.segment<3>(0) = MathUtils::mrp_switchto_shadow(x_hat.segment<3>(0));
     // 6. U-Matrix 连续降维更新协方差
     Eigen::MatrixXd U = K * S_y;
     for (int i = 0; i < m; ++i) {
         cholDownDate(S, U.col(i), -1.0);
     }
+    // check_mrp_shadow_set();
 }
 
 // --- 接口：加速度计自适应序贯更新 ---
@@ -286,6 +286,7 @@ void AttitudeUKF::update_accel(const Eigen::Vector3d& Z_acc) {
 
     // 4. 调用底层核心引擎
     measurement_update_core(Z_acc, Z_sigma, S_R_acc);
+
 }
 
 // --- 接口：罗盘序贯更新 ---

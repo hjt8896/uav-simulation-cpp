@@ -32,7 +32,7 @@ public:
     // 核心计算逻辑：外环 200Hz 或 1000Hz 调用
     // 输入：当前姿态误差 sigma (本文假设目标姿态为 0，所以误差即为当前 sigma)
     // 输出：期望角速度 omega_d，以及前馈角加速度 omega_d_dot
-    void compute_steering(const Eigen::Vector3d& sigma,
+    void compute_steering(Eigen::Vector3d sigma,
                           Eigen::Vector3d& omega_d,
                           Eigen::Vector3d& omega_d_dot);
 };

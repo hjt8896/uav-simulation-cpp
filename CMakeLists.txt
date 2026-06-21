@@ -37,6 +37,8 @@ add_executable(aircraft_sim
         AltitudeSMC.cpp
         AltitudeSMC.h
         LowPassFilter.h
+        USQUE.cpp
+        USQUE.h
         #                ukf_test.cpp
         )
 

@@ -2,6 +2,7 @@
 #define AIRCRAFT_SIM_ATTITUDEUKF_H
 
 #pragma once
+#include "MathUtils.h"
 #include "eigen3/Eigen/Dense"
 #include <vector>
 #include <cmath>
@@ -35,7 +36,7 @@ private:
     static void cholDownDate(Eigen::MatrixXd& S, const Eigen::VectorXd& x, double w);
     static Eigen::VectorXd compute_derivatives(const Eigen::VectorXd& x);
     static Eigen::VectorXd system_dynamics(const Eigen::VectorXd& state_in, double dt);
-
+    void check_mrp_shadow_set();
     // // 提取公共的 MRP 转 DCM 矩阵逻辑
     // static Eigen::Matrix3d mrp_to_dcm(const Eigen::Vector3d& sigma);
 
@@ -59,7 +60,7 @@ public:
     void update_gyro(const Eigen::Vector3d& Z_gyro); // ★ 新增
 
     // 获取当前姿态供外部使用
-    [[nodiscard]] Eigen::Vector3d get_mrp() const { return x_hat.segment<3>(0); }
+    [[nodiscard]] Eigen::Vector3d get_mrp() const { return MathUtils::mrp_switchto_shadow(x_hat.segment<3>(0)); }
     [[nodiscard]] Eigen::Vector3d get_omega() const { return x_hat.segment<3>(3); }
 };
 

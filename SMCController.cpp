@@ -20,9 +20,9 @@ SMCController::SMCController(Eigen::Matrix3d inertia) : J(inertia) {
     integral_e.setZero();
 
     // 默认参数 (需要根据实际 1kg 飞机去整定)
-    lambda = Eigen::Vector3d(15.0, 15.0, 8.0).asDiagonal();
-    eta    = Eigen::Vector3d(10.0, 10.0, 5.0).asDiagonal();
-    K      = Eigen::Vector3d(8.0, 8.0, 4.0).asDiagonal();
+    lambda = Eigen::Vector3d(15.0, 15.0, 15.0).asDiagonal();
+    eta    = Eigen::Vector3d(10.0, 10.0, 10.0).asDiagonal();
+    K      = Eigen::Vector3d(8.0, 8.0, 8.0).asDiagonal();
 
     epsilon = 0.1; // 边界层，越小越精确但更容易抖振
     max_integral = Eigen::Vector3d(0.2, 0.2, 0.2); // 积分限幅
