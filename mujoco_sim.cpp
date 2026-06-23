@@ -21,6 +21,10 @@
 #include "BMI088_Sensor.h"
 #include "USQUE.h"
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 // ==========================================
 // [上帝视角] 全局指针与鼠标事件监听
 // ==========================================
@@ -78,6 +82,13 @@ int main() {
     // 2. 加载 MuJoCo 模型
     char error[1000] = "Could not load XML model";
      m = mj_loadXML("quadcopter.xml", 0, error, 1000);
+
+    // ★ 加上这段护城河代码！
+    if (!m) {
+        std::cerr << "❌ MuJoCo 启动惨败，原因: " << error << std::endl;
+        return 1;
+    }
+
     mjData* d = mj_makeData(m);
 
     static int pos_id    = mj_name2id(m, mjOBJ_SENSOR, "true_pos");
@@ -172,6 +183,23 @@ int main() {
 
     std::cout << "引擎点火！无人机正在 1 米高空尝试抵抗重力..." << std::endl;
     std::cout << "3D 视界已打开！准备渲染..." << std::endl;
+
+    // ★ 升级为 TCP Socket (SOCK_STREAM)
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in servaddr;
+    memset(&servaddr, 0, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(8080);
+    servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    std::cout << "正在接通 Python 神经网络..." << std::endl;
+    // TCP 必须先 connect 握手！
+    if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+        std::cerr << "❌ 连接 Python 失败！请确保先运行了 Python 脚本！" << std::endl;
+    } else {
+        std::cout << "✅ 成功连接 Python 中转站！" << std::endl;
+    }
+
     // double yaw = 0.0;
     // 4. ★ 核心：图形化主循环
     while (!glfwWindowShouldClose(window)) {
@@ -299,10 +327,10 @@ int main() {
             double cmd_roll = 0.0, cmd_pitch = 0.0, yaw_rate_cmd = 0.0;
             double max_angle = 0.3;
 
-            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) cmd_pitch =  max_angle;
-            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) cmd_pitch = -max_angle;
-            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) cmd_roll  = -max_angle;
-            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) cmd_roll  =  max_angle;
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) cmd_pitch =  -max_angle;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) cmd_pitch = max_angle;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) cmd_roll  = max_angle;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) cmd_roll  =  -max_angle;
             // if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) yaw   -= 0.001;
             // if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) yaw   +=  0.001;
 
@@ -398,6 +426,32 @@ int main() {
         int viewport_width, viewport_height;
         glfwGetFramebufferSize(window, &viewport_width, &viewport_height);
         mjrRect viewport = {0, 0, viewport_width, viewport_height};
+
+        // ★ 新增：定时抓拍 FPV 画面并发送 UDP (每隔 2.0 秒触发一次)
+        static double last_fpv_time = 0.0;
+        if (d->time - last_fpv_time >= 2.0) {
+            last_fpv_time = d->time;
+
+            // 设置大模型需要的 256x256 分辨率
+            mjrRect fpv_viewport = {0, 0, 256, 256};
+
+            // 切换到刚刚在 XML 里写的 fpv_cam
+            mjvCamera fpv_cam;
+            mjv_defaultCamera(&fpv_cam);
+            fpv_cam.type = mjCAMERA_FIXED;
+            fpv_cam.fixedcamid = mj_name2id(m, mjOBJ_CAMERA, "fpv_cam");
+
+            // 渲染这 256x256 的画面并读取像素
+            mjv_updateScene(m, d, &opt, NULL, &fpv_cam, mjCAT_ALL, &scn);
+            mjr_render(fpv_viewport, &scn, &con);
+
+            unsigned char rgb[256 * 256 * 3];
+            mjr_readPixels(rgb, NULL, fpv_viewport, &con);
+
+            // 直接把纯像素数组砸给 Python 中转站！
+            sendto(sockfd, rgb, sizeof(rgb), 0, (const struct sockaddr *)&servaddr, sizeof(servaddr));
+            std::cout << "[" << d->time << "s] FPV 画面已通过 UDP 发送！" << std::endl;
+        }
 
         // 更新场景并在屏幕上画出来
         mjv_updateScene(m, d, &opt, NULL, &cam, mjCAT_ALL, &scn);

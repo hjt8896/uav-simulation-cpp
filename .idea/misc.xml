@@ -8,4 +8,5 @@
   </component>
   <component name="CMakeWorkspace" PROJECT_DIR="$PROJECT_DIR$" />
   <component name="KubernetesApiProvider"><![CDATA[{}]]></component>
+  <component name="WestSettings"><![CDATA[{}]]></component>
 </project>
