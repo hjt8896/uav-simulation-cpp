@@ -25,6 +25,34 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+
+// ★ 强制字节对齐，保持和 STM32 完全一致！
+#pragma pack(push, 1)
+struct HitlSensorPacket {
+    uint8_t header1 = 0x55;      // 帧头 1
+    uint8_t header2 = 0xAA;      // 帧头 2
+    float gyro[3]{};               // 陀螺仪 (rad/s)
+    float accel[3]{};              // 加速度计 (m/s^2)
+    float mag[3]{};                // 磁力计 (Gauss)
+    uint32_t timestamp{};          // 仿真时间戳 (ms)
+    uint8_t checksum{};            // 累加校验和
+};
+#pragma pack(pop)
+// 辅助函数：计算校验和
+uint8_t calculate_checksum(const HitlSensorPacket& pkt) {
+    uint8_t* ptr = (uint8_t*)&pkt.gyro[0]; // 从数据净荷开始算
+    uint8_t sum = 0;
+    // 数据净荷总长度：9个float(36字节) + 1个uint32(4字节) = 40字节
+    for (int i = 0; i < 40; ++i) {
+        sum += ptr[i];
+    }
+    return sum;
+}
+
 // ==========================================
 // [上帝视角] 全局指针与鼠标事件监听
 // ==========================================
@@ -184,7 +212,9 @@ int main() {
     std::cout << "引擎点火！无人机正在 1 米高空尝试抵抗重力..." << std::endl;
     std::cout << "3D 视界已打开！准备渲染..." << std::endl;
 
-    // ★ 升级为 TCP Socket (SOCK_STREAM)
+    // ==========================================
+    // ★ 视觉链路：柔性连接 Python 神经网络
+    // ==========================================
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in servaddr;
     memset(&servaddr, 0, sizeof(servaddr));
@@ -192,12 +222,32 @@ int main() {
     servaddr.sin_port = htons(8080);
     servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
-    std::cout << "正在接通 Python 神经网络..." << std::endl;
-    // TCP 必须先 connect 握手！
+    bool use_vision = false; // ★ 视觉链路护盾标志位
+
+    std::cout << "正在探寻 Python 视觉神经网络..." << std::endl;
+    // 尝试握手
     if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-        std::cerr << "❌ 连接 Python 失败！请确保先运行了 Python 脚本！" << std::endl;
+        std::cout << "⚠️ 警告：未检测到 Python 视觉节点，FPV 画面传输已关闭，降级为纯物理/飞控推演！" << std::endl;
     } else {
-        std::cout << "✅ 成功连接 Python 中转站！" << std::endl;
+        use_vision = true;
+        std::cout << "✅ 成功连接 Python 中转站，视觉链路已激活！" << std::endl;
+    }
+
+    std::cout << "正在接通 STM32H7 硬件在环隧道..." << std::endl;
+    int serial_fd = open("/dev/ttyACM0", O_RDWR | O_NOCTTY | O_SYNC);
+    bool use_hitl = false; // ★ 核心护盾：状态标志位
+
+    if (serial_fd < 0) {
+        std::cout << "⚠️ 警告：未检测到 STM32 飞控，自动降级为纯虚拟 SITL 模式运行！" << std::endl;
+    } else {
+        // 只有连上了，才去配置波特率
+        struct termios tty;
+        tcgetattr(serial_fd, &tty);
+        cfmakeraw(&tty);
+        tcsetattr(serial_fd, TCSANOW, &tty);
+
+        use_hitl = true; // 激活硬件在环标志
+        std::cout << "✅ 成功连通 STM32 飞控，HITL 模式启动！" << std::endl;
     }
 
     // double yaw = 0.0;
@@ -275,6 +325,33 @@ int main() {
             for (int i = 0; i < 3; ++i) {
                 filtered_gyro(i) = lpf_gyro[i].apply(noisy_gyro(i));
                 filtered_acc(i)  = lpf_acc[i].apply(noisy_acc(i));
+            }
+
+            // ==========================================
+            // ★ HITL：向 STM32 飞控注入传感器数据！
+            // ==========================================
+            if (use_hitl)
+            {
+                // ★ 只有成功连上了硬件，才允许往外发数据
+                HitlSensorPacket tx_pkt;
+                // 填装数据 (转为 C++ 基础数组格式)
+                tx_pkt.gyro[0] = filtered_gyro(0);
+                tx_pkt.gyro[1] = filtered_gyro(1);
+                tx_pkt.gyro[2] = filtered_gyro(2);
+
+                tx_pkt.accel[0] = noisy_acc(0);
+                tx_pkt.accel[1] = noisy_acc(1);
+                tx_pkt.accel[2] = noisy_acc(2);
+
+                tx_pkt.mag[0] = noisy_mag(0);
+                tx_pkt.mag[1] = noisy_mag(1);
+                tx_pkt.mag[2] = noisy_mag(2);
+
+                tx_pkt.timestamp = (uint32_t)(current_time * 1000.0); // 换算为毫秒
+
+                // 计算校验和并发送
+                tx_pkt.checksum = calculate_checksum(tx_pkt);
+                write(serial_fd, &tx_pkt, sizeof(HitlSensorPacket));
             }
             // ==========================================
             // [B] 姿态解算滤波 (UKF)
@@ -427,30 +504,37 @@ int main() {
         glfwGetFramebufferSize(window, &viewport_width, &viewport_height);
         mjrRect viewport = {0, 0, viewport_width, viewport_height};
 
-        // ★ 新增：定时抓拍 FPV 画面并发送 UDP (每隔 2.0 秒触发一次)
+        // ==========================================
+        // ★ 视觉发送时刻 (2.0s 触发，且必须连上 Python)
+        // ==========================================
         static double last_fpv_time = 0.0;
-        if (d->time - last_fpv_time >= 2.0) {
+        if (use_vision && (d->time - last_fpv_time >= 2.0)) {
             last_fpv_time = d->time;
 
-            // 设置大模型需要的 256x256 分辨率
             mjrRect fpv_viewport = {0, 0, 256, 256};
-
-            // 切换到刚刚在 XML 里写的 fpv_cam
             mjvCamera fpv_cam;
             mjv_defaultCamera(&fpv_cam);
             fpv_cam.type = mjCAMERA_FIXED;
             fpv_cam.fixedcamid = mj_name2id(m, mjOBJ_CAMERA, "fpv_cam");
 
-            // 渲染这 256x256 的画面并读取像素
             mjv_updateScene(m, d, &opt, NULL, &fpv_cam, mjCAT_ALL, &scn);
             mjr_render(fpv_viewport, &scn, &con);
 
             unsigned char rgb[256 * 256 * 3];
             mjr_readPixels(rgb, NULL, fpv_viewport, &con);
 
-            // 直接把纯像素数组砸给 Python 中转站！
-            sendto(sockfd, rgb, sizeof(rgb), 0, (const struct sockaddr *)&servaddr, sizeof(servaddr));
-            std::cout << "[" << d->time << "s] FPV 画面已通过 UDP 发送！" << std::endl;
+            // ★ 终极防炸机补丁：MSG_NOSIGNAL！
+            // 把你原来的 sendto 换成标准的 TCP send，并加上 MSG_NOSIGNAL。
+            // 这样就算 Python 突然被关掉，C++ 也绝不崩溃，只会返回一个负数错误码！
+            ssize_t bytes_sent = send(sockfd, rgb, sizeof(rgb), MSG_NOSIGNAL);
+
+            if (bytes_sent < 0) {
+                std::cout << "❌ 视觉链路意外断开 (Python 掉线)！已自动切断图传。" << std::endl;
+                use_vision = false; // 掐断标志位，以后不再白白浪费算力渲染
+                close(sockfd);      // 优雅关闭文件描述符
+            } else {
+                std::cout << "[" << d->time << "s] FPV 画面已发送给神经网络！" << std::endl;
+            }
         }
 
         // 更新场景并在屏幕上画出来
