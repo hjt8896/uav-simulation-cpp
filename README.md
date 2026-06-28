@@ -88,4 +88,8 @@ pip install pandas matplotlib
 # 运行绘图脚本，生成 3D 姿态追踪性能对比图
 python plot_attitude.py
 ```
+## 打开FPV视角及后续VLA接入
+运行client.py
+## HITL硬件在环仿真
+...
 
