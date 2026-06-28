@@ -39,6 +39,10 @@ add_executable(aircraft_sim
         LowPassFilter.h
         USQUE.cpp
         USQUE.h
+        Barometer_Sensor.cpp
+        Barometer_Sensor.h
+        GPS_Sensor.cpp
+        GPS_Sensor.h
         #                ukf_test.cpp
         )
 
