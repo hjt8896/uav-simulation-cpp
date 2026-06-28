@@ -9,11 +9,11 @@
 
 ## ✨ 核心算法特性 (Core Features)
 
-* **9 维 SR-UKF 状态估计器 (Square-Root Unscented Kalman Filter)**
-    * 基于 MRP (修正罗德里格斯参数) 的空间折叠流形，彻底免疫 360° 奇异点。
-    * 包含精确的协方差雅可比伴随映射 (Jacobian Shadow Set Mapping)，在跨越姿态边界时确保误差椭球不发散。
-    * 引入动力学先验约束，完美规避由于非线性陀螺耦合力矩引起的相位估计翻转。
-
+* **SR-UKF 状态估计器 (Unscented Quaternion Estimator based on Error-State MRP)**
+    * 外层防爆盾（全局名义状态）： 采用绝对四元数 $q$ 和绝对角速度进行纯物理空间 RK4 积分，全空间绝对无奇点。
+    * 内层极速引擎（局部误差状态）： 采用 3 维误差 MRP $\delta\sigma$ 进行 Sigma 点无迹变换（UT），在流形切空间内保证协方差矩阵绝对满秩。
+    * 拓扑完美连续： 彻底摒弃内部影子集切换，免疫任何极端的连续姿态翻滚。
+    * 极其强悍的数值稳定性： 底层摒弃不稳定的矩阵求逆，使用平方根无迹卡尔曼滤波（SR-UKF），通过 Householder QR 分解与手写 Givens Rotation 降维更新（Rank-1 Downdate），将数值截断误差降至最低。
 * **非线性滑模控制器 (Sliding Mode Control, SMC)**
     * 极其暴力的底层闭环镇压能力，无惧外部强风扰动。
     * 包含完整的 $\omega \times (I\omega)$ 陀螺力矩前馈补偿 (Gyroscopic Coupling Compensation)。
