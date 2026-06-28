@@ -46,6 +46,7 @@ mkdir build && cd build
 cmake ..
 make -j$(nproc)
 ```
+编译结束后会生成一个cmake-build-debug目录，将quadcopter.xml、omega_plot.py、attitude_plot.py、plot_trajectory.py、image_1.png移动到cmake-build-debug即可运行
 ### 运行
 ``` bash
 ./aircraft_sim
