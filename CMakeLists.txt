@@ -3,6 +3,12 @@ project(aircraft_sim)
 # 找到系统中的 GLFW3 库
 find_package(glfw3 REQUIRED)
 include_directories(${CMAKE_SOURCE_DIR}/mujoco-3.9.0/include)
+# 添加 OSQP 生成代码的头文件路径
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/osqp_workspace/inc/public)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/osqp_workspace/inc/private)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/osqp_workspace)
+# 将 OSQP 生成的源码收集起来
+file(GLOB OSQP_SRC "${CMAKE_SOURCE_DIR}/osqp_workspace/src/*.c" workspace.c workspace.h)
 # 2. 告诉链接器去哪里找动态库
 link_directories(${CMAKE_SOURCE_DIR}/mujoco-3.9.0/lib)
 
@@ -44,7 +50,12 @@ add_executable(aircraft_sim
         GPS_Sensor.cpp
         GPS_Sensor.h
         #                ukf_test.cpp
-        )
+        ${OSQP_SRC}
+        OuterLoopMPC.cpp
+        OuterLoopMPC.h
+        osqp_workspace/workspace.c
+        osqp_workspace/workspace.h
+)
 
 target_link_libraries(
         aircraft_sim
