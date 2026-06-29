@@ -1,0 +1,55 @@
+<mujoco model="SR-UKF_Quadcopter">
+    <compiler angle="degree"/>
+    <option timestep="0.001" gravity="0 0 -9.81"/>
+
+    <asset>
+        <material name="body_mat" rgba="0.2 0.2 0.2 1"/>
+        <material name="arm_front" rgba="0.8 0.1 0.1 1"/> <material name="arm_back"  rgba="0.2 0.8 0.2 1"/> <material name="prop_mat" rgba="0.1 0.8 0.9 0.5"/>
+
+        <texture type="2d" name="target_tex" file="image_1.png"/>
+        <material name="target_mat" texture="target_tex" emission="1" specular="0" shininess="0"/>
+    </asset>
+
+    <worldbody>
+        <light pos="0 0 5" dir="0 0 -1" diffuse="1 1 1"/>
+        <geom type="plane" size="5 5 0.1" rgba="0.8 0.8 0.8 1" />
+
+        <geom type="box" pos="2 0 1" size="1.5 0.5 0.1" axisangle="1 1 1 120" material="target_mat" rgba="1 1 1 1"/>
+
+        <body name="quad" pos="0 0 1">
+            <freejoint name="root"/>
+            <inertial pos="0 0 0" mass="1.0" diaginertia="0.01 0.01 0.02"/>
+<!--            <joint name="roll"  type="hinge" axis="1 0 0" pos="0 0 0"/>-->
+<!--            <joint name="pitch" type="hinge" axis="0 1 0" pos="0 0 0"/>-->
+<!--            <joint name="yaw"   type="hinge" axis="0 0 1" pos="0 0 0"/>-->
+            <camera name="fpv_cam" pos="0.15 0 0" xyaxes="0 -1 0 0 0 1" fovy="45"/>
+
+            <geom type="box" size="0.05 0.05 0.02" material="body_mat"/>
+
+            <geom type="capsule" fromto="0 0 0  0.2 -0.2 0" size="0.01" material="arm_front"/> <geom type="capsule" fromto="0 0 0 -0.2 -0.2 0" size="0.01" material="arm_back"/>  <geom type="capsule" fromto="0 0 0 -0.2  0.2 0" size="0.01" material="arm_back"/>  <geom type="capsule" fromto="0 0 0  0.2  0.2 0" size="0.01" material="arm_front"/>
+            <site name="motor1" pos=" 0.2 -0.2 0.02" type="cylinder" size="0.05 0.005" material="prop_mat"/>
+            <site name="motor2" pos="-0.2 -0.2 0.02" type="cylinder" size="0.05 0.005" material="prop_mat"/>
+            <site name="motor3" pos="-0.2  0.2 0.02" type="cylinder" size="0.05 0.005" material="prop_mat"/>
+            <site name="motor4" pos=" 0.2  0.2 0.02" type="cylinder" size="0.05 0.005" material="prop_mat"/>
+
+            <site name="imu_site" pos="0 0 0" size="0.01" type="sphere" rgba="1 1 0 1"/>
+        </body>
+    </worldbody>
+
+    <sensor>
+        <accelerometer site="imu_site" name="accel"/>
+        <gyro site="imu_site" name="gyro"/>
+
+        <framepos name="true_pos" objtype="body" objname="quad"/>
+        <framelinvel name="true_linvel" objtype="body" objname="quad"/>
+        <framequat name="true_quat" objtype="body" objname="quad"/>
+        <frameangvel name="true_angvel" objtype="body" objname="quad"/>
+    </sensor>
+
+    <actuator>
+        <motor name="thrust1" site="motor1" gear="0 0 1 0 0  -0.02"/>
+        <motor name="thrust2" site="motor2" gear="0 0 1 0 0 0.02"/>
+        <motor name="thrust3" site="motor3" gear="0 0 1 0 0  -0.02"/>
+        <motor name="thrust4" site="motor4" gear="0 0 1 0 0 0.02"/>
+    </actuator>
+</mujoco>
