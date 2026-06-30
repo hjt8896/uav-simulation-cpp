@@ -1,4 +1,4 @@
-<img width="256" height="256" alt="image_1" src="https://github.com/user-attachments/assets/b3456181-2191-4a78-ba4a-ccd0ce42f963" /># Quad-SITL-GNC: Aerospace-Grade Quadcopter Simulation
+# Quad-SITL-GNC: Aerospace-Grade Quadcopter Simulation
 
 [![C++17](https://img.shields.io/badge/C++-17-blue.svg)](https://isocpp.org/)
 [![MuJoCo](https://img.shields.io/badge/Physics-MuJoCo_3.9.0-black.svg)](https://mujoco.org/)
