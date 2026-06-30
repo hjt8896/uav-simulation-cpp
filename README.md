@@ -1,4 +1,4 @@
-# Quad-SITL-GNC: Aerospace-Grade Quadcopter Simulation
+<img width="256" height="256" alt="image_1" src="https://github.com/user-attachments/assets/b3456181-2191-4a78-ba4a-ccd0ce42f963" /># Quad-SITL-GNC: Aerospace-Grade Quadcopter Simulation
 
 [![C++17](https://img.shields.io/badge/C++-17-blue.svg)](https://isocpp.org/)
 [![MuJoCo](https://img.shields.io/badge/Physics-MuJoCo_3.9.0-black.svg)](https://mujoco.org/)
@@ -45,11 +45,13 @@ sudo apt install cmake build-essential libglfw3-dev
 ## 编译与运行 (Build & Run)
 ### 编译项目
 ```bash
+git clone -b HITL --single-branch https://github.com/hjt8896/uav-simulation-cpp.git
+cd uav-simulation-cpp
 mkdir build && cd build
 cmake ..
 make -j$(nproc)
 ```
-编译结束后会生成一个cmake-build-debug目录，将quadcopter.xml、omega_plot.py、attitude_plot.py、plot_trajectory.py、image_1.png移动到cmake-build-debug即可运行
+编译结束后会生成一个build目录，将quadcopter.xml、omega_plot.py、attitude_plot.py、plot_trajectory.py、image_1.png移动到build即可运行
 ### 运行
 ``` bash
 ./aircraft_sim
